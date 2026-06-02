@@ -1,0 +1,11 @@
+{
+  "apiKey": "YOUR_API_KEY",
+  "secret": "YOUR_SECRET",
+  "backtest": {
+    "initialBalance": 1000.0,
+    "feePerc": 0.0004,
+    "slippagePerc": 0.0005,
+    "leverage": 3.0,
+    "hoursBack": 24*365
+  }
+}
