@@ -9,7 +9,8 @@ include(FetchContent)
 FetchContent_Declare(
   nlohmann_json
   GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG v3.11.2
+	# Use a nlohmann/json tag compatible with older CMake versions
+  GIT_TAG v3.9.1
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
