@@ -6,16 +6,52 @@
 - 支持杠杆、按保证金/仓位计算下单、部分成交处理与精确下单步长对齐。
 - 包含回测模块（4h 数据、手续费与滑点模拟、基础统计指标）。
 
-快速开始
-1. 准备：安装 CMake 与 Visual Studio（含 C++ 工作负载），确保系统可用 libcurl 与 OpenSSL 开发库。
-2. 克隆并构建：
-   - mkdir build && cd build
-   - cmake ..
-   - cmake --build . --config Release
-3. 配置：编辑根目录的 config.json，填入你的 Testnet 或真实 API key/secret（建议先用 Testnet）。
-4. 回测运行：在仓库根创建空文件 run_backtest.flag，或运行可执行文件并传入 --backtest。可配置参数在 config.json 的 backtest 节点或通过命令行覆盖。
-   - 示例：Copilot_Coin.exe --backtest --initialBalance 2000 --feePerc 0.0003 --slippagePerc 0.0006 --leverage 2 --hoursBack 8760
-5. 实盘运行：删除 run_backtest.flag，程序进入每分钟轮询模式并按策略下单（请务必先在 Testnet 完整测试）。
+构建与运行说明
+
+1) 环境准备
+- 安装 CMake（>= 3.16 推荐）与 Visual Studio（含 C++ 工作负载）。
+- 推荐使用 vcpkg 管理依赖：
+  - git clone https://github.com/microsoft/vcpkg.git
+  - .\vcpkg\bootstrap-vcpkg.bat
+  - .\vcpkg\vcpkg.exe install nlohmann-json curl[openssl]:x64-windows openssl:x64-windows
+
+2) 本地构建（Windows / PowerShell）
+- 在仓库根：
+  - Remove-Item -Recurse -Force build  # 可选：清理
+  - mkdir build; cd build
+  - cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake
+  - cmake --build . --config Debug
+- 可执行文件位置： build\Debug\Copilot_Coin.exe
+
+3) 配置（config.json）
+- 在仓库根编辑 config.json：
+{
+  "apiKey": "YOUR_API_KEY",
+  "secret": "YOUR_SECRET",
+  "backtest": {
+    "initialBalance": 1000.0,
+    "feePerc": 0.0004,
+    "slippagePerc": 0.0005,
+    "leverage": 3.0,
+    "hoursBack": 8760
+  }
+}
+- 建议先在 Binance Futures Testnet 创建 API Key 并填入，以避免真实资金风险。
+
+4) 回测运行
+- 方式 A（flag 文件）：
+  - 在仓库根创建文件 run_backtest.flag
+  - 运行可执行文件： .\\build\\Debug\\Copilot_Coin.exe
+- 方式 B（命令行参数）：
+  - 直接运行并传入覆盖参数：
+    .\\build\\Debug\\Copilot_Coin.exe --backtest --initialBalance 2000 --feePerc 0.0003 --slippagePerc 0.0006 --leverage 2 --hoursBack 8760
+- 输出：程序会打印回测摘要（交易次数、起止资金、胜率、最大回撤、夏普等）。
+
+5) 实盘（实时）运行
+- 确认 config.json 填入正确的 apiKey/secret（Testnet 或主网）。
+- 删除 run_backtest.flag（若存在）： Remove-Item run_backtest.flag
+- 运行可执行文件，程序将每分钟拉取 K 线并根据策略判断下单。
+
 
 重要注意事项（必须阅读）
 - 示例代码为教学与框架用途，未包含完整风控与高可用措施。生产环境必须补足：完整错误处理、重试、限频、日志、持久化、监控与报警。
