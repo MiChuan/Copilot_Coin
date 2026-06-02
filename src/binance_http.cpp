@@ -1,5 +1,7 @@
 #include "binance_http.h"
 #include "util.h"
+#include "mock_data_generator.h"
+#include "csv_kline_loader.h"
 #include <curl/curl.h>
 #include <sstream>
 #include <iostream>
@@ -71,12 +73,28 @@ nlohmann::json BinanceHttp::cancelOrder(const std::string &symbol, long long ord
 }
 
 BinanceHttp::BinanceHttp(const std::string &apiKey, const std::string &secret, bool useTestnet)
-	: apiKey_(apiKey), secret_(secret) {
+	: apiKey_(apiKey), secret_(secret), offlineMode_(false), csvDataPath_("") {
 #ifdef SIMULATION
 	baseUrl_ = "https://testnet.binancefuture.com";
 #else
 	baseUrl_ = useTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
 #endif
+}
+
+void BinanceHttp::setOfflineMode(bool offline) {
+	offlineMode_ = offline;
+	if (offline) {
+		std::cout << "[Offline Mode] Mock data generator enabled" << std::endl;
+	}
+}
+
+bool BinanceHttp::isOfflineMode() const {
+	return offlineMode_;
+}
+
+void BinanceHttp::setCsvDataPath(const std::string& path) {
+	csvDataPath_ = path;
+	std::cout << "[CSV Mode] Data path set to: " << path << std::endl;
 }
 
 std::string BinanceHttp::doRequest(const std::string &url, const std::string &method, const std::string &body, const std::string &headers) {
@@ -90,6 +108,11 @@ std::string BinanceHttp::doRequest(const std::string &url, const std::string &me
 		curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+		// 禁用 SSL 证书验证（仅用于调试）
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+		// 设置超时（60秒）
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
 		if(!headers.empty()) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
 		if(method == "POST") {
 			curl_easy_setopt(curl, CURLOPT_POST, 1L);
@@ -111,8 +134,21 @@ std::string BinanceHttp::doRequest(const std::string &url, const std::string &me
 }
 
 nlohmann::json BinanceHttp::getKlines(const std::string &symbol, const std::string &interval, int limit) {
+	// CSV mode: load from CSV file
+	if (!csvDataPath_.empty()) {
+		std::cout << "[CSV] Loading data from: " << csvDataPath_ << " with limit=" << limit << std::endl;
+		return CsvKlineLoader::loadFromCsv(csvDataPath_, limit);
+	}
+
+	// Offline mode: use mock data
+	if (offlineMode_) {
+		std::cout << "[Offline] Generating " << limit << " candles of " << interval << std::endl;
+		return MockDataGenerator::generateKlines(symbol, interval, limit, 50000.0, 0.02);
+	}
+
+	// Online mode: fetch from Binance API
 	std::ostringstream oss;
-	oss<<baseUrl_<<"/fapi/v1/klines?symbol="<<symbol<<"&interval="<<interval<<"&limit="<<limit;
+	oss << baseUrl_ << "/fapi/v1/klines?symbol=" << symbol << "&interval=" << interval << "&limit=" << limit;
 	std::string res = doRequest(oss.str(), "GET", "", "");
 	try {
 		return nlohmann::json::parse(res);

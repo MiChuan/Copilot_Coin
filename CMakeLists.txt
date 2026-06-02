@@ -18,6 +18,8 @@ add_executable(${PROJECT_NAME}
   src/executor.cpp
   src/backtest.cpp
   src/util.cpp
+  src/mock_data_generator.cpp
+  src/csv_kline_loader.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE src)
@@ -29,3 +31,15 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE -DSIMULATION=1)
+
+# Test executable for CSV loading
+add_executable(test_csv
+  src/test_csv.cpp
+  src/csv_kline_loader.cpp
+)
+
+target_include_directories(test_csv PRIVATE src)
+
+target_link_libraries(test_csv PRIVATE
+  nlohmann_json::nlohmann_json
+)

@@ -6,6 +6,14 @@
 class BinanceHttp {
 public:
 	BinanceHttp(const std::string &apiKey, const std::string &secret, bool useTestnet=true);
+
+	// Set offline mode
+	void setOfflineMode(bool offline);
+	bool isOfflineMode() const;
+
+	// Set CSV file path for offline data
+	void setCsvDataPath(const std::string& path);
+
 	nlohmann::json getKlines(const std::string &symbol, const std::string &interval, int limit);
 	nlohmann::json getAccountBalance();
 	nlohmann::json getPositionRisk();
@@ -20,5 +28,7 @@ private:
 	std::string apiKey_;
 	std::string secret_;
 	std::string baseUrl_;
+	bool offlineMode_;
+	std::string csvDataPath_;
 	std::string doRequest(const std::string &url, const std::string &method, const std::string &body, const std::string &headers);
 };

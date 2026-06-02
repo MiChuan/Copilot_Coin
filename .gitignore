@@ -71,3 +71,8 @@ Testing/
 
 # Visual Studio folder
 .vs/
+
+# Testing
+data/
+config.json
+run_backtest.flag
