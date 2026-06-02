@@ -5,15 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-include(FetchContent)
-FetchContent_Declare(
-  nlohmann_json
-  GIT_REPOSITORY https://github.com/nlohmann/json.git
-  # Use a newer compatible nlohmann/json tag
-  GIT_TAG v3.11.3
-)
-FetchContent_MakeAvailable(nlohmann_json)
-
+# 统一用 find_package，所有依赖都由 vcpkg 提供
+find_package(nlohmann_json CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
 
@@ -23,7 +16,7 @@ add_executable(${PROJECT_NAME}
   src/indicators.cpp
   src/strategy.cpp
   src/executor.cpp
-	src/backtest.cpp
+  src/backtest.cpp
   src/util.cpp
 )
 
@@ -35,5 +28,4 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   nlohmann_json::nlohmann_json
 )
 
-# Optional: compile definitions to toggle testnet/simulate
 target_compile_definitions(${PROJECT_NAME} PRIVATE -DSIMULATION=1)
