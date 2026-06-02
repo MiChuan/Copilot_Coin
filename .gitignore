@@ -44,6 +44,9 @@ build/
 Build/
 build-*/
 
+# Visual Studio workspace
+.vs/
+
 # CMake generated files
 CMakeFiles/
 CMakeCache.txt
