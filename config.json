@@ -1,11 +1,13 @@
 {
-  "apiKey": "Mww9FQvfALc68F9GW8qQbYkbOxstjnTfmiJKHi7u5IdjNc8QsbFyioiJQbjGbcLD",
-  "secret": "zBCXz8x8bLhU5zMBEFMI9Yzw0ggr6ZdmpfDg8LJek4jPv9VN9WciQKkoQgZXlEqc",
+  "apiKey": "YOUR_API_KEY",
+  "secret": "YOUR_SECRET",
   "backtest": {
     "initialBalance": 1000.0,
     "feePerc": 0.0004,
     "slippagePerc": 0.0005,
     "leverage": 3.0,
-    "hoursBack": "24*365"
+    "hoursBack": 8760,
+    "mode": "report",
+    "csvPath": "F:/Project/test/Copilot_Coin/data/BTCUSDT_1h.csv"
   }
 }

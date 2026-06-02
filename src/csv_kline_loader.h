@@ -26,6 +26,9 @@ public:
 		double takerBuyQuote
 	);
 
+	// 将 1h K线聚合为更高周期K线，例如 4h
+	static nlohmann::json aggregateKlines(const nlohmann::json& source, int intervalHours);
+
 private:
 	// 解析CSV一行
 	static std::vector<std::string> parseCsvLine(const std::string& line);

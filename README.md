@@ -39,13 +39,26 @@
 - 建议先在 Binance Futures Testnet 创建 API Key 并填入，以避免真实资金风险。
 
 4) 回测运行
-- 方式 A（flag 文件）：
-  - 在仓库根创建文件 run_backtest.flag
-  - 运行可执行文件： .\\build\\Debug\\Copilot_Coin.exe
-- 方式 B（命令行参数）：
+- 推荐使用 `run_test.ps1` 一键完成编译 + 回测：
+  - Debug：`.\run_test.ps1 -Report -OpenResults`
+  - Release：`.\run_test.ps1 -Release -Report -OpenResults`
+  - 运行前清理旧报表：`.\run_test.ps1 -Clean -Report -OpenResults`
+- 主命令 + 二级子命令：
+  - `backtest run`：标准回测
+  - `backtest offline`：离线 CSV 回测并输出报表
+  - `backtest report`：离线回测 + 生成 `reports/` 下的 CSV / JSON 报表
+- 方式 A（直接运行离线 CSV）：
+  - 使用本地一年 BTCUSDT 1 小时数据：
+    .\\build\\Debug\\Copilot_Coin.exe backtest report --csvPath "F:\\Project\\test\\Copilot_Coin\\data\\BTCUSDT_1h.csv"
+  - 或使用：`backtest offline --csvPath ...`
+- 方式 B（传统参数兼容）：
   - 直接运行并传入覆盖参数：
-    .\\build\\Debug\\Copilot_Coin.exe --backtest --initialBalance 2000 --feePerc 0.0003 --slippagePerc 0.0006 --leverage 2 --hoursBack 8760
-- 输出：程序会打印回测摘要（交易次数、起止资金、胜率、最大回撤、夏普等）。
+    .\\build\\Debug\\Copilot_Coin.exe backtest run --initialBalance 2000 --feePerc 0.0003 --slippagePerc 0.0006 --leverage 2 --hoursBack 8760
+- 输出：程序会打印回测摘要（交易次数、起止资金、胜率、最大回撤、夏普等），并在 `reports/` 下生成：
+  - `bt_equity.csv`
+  - `bt_summary.json`
+  - `bt_trades.csv`
+  - `bt_trades.json`
 
 5) 实盘（实时）运行
 - 确认 config.json 填入正确的 apiKey/secret（Testnet 或主网）。

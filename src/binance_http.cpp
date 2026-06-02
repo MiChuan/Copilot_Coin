@@ -84,7 +84,9 @@ BinanceHttp::BinanceHttp(const std::string &apiKey, const std::string &secret, b
 void BinanceHttp::setOfflineMode(bool offline) {
 	offlineMode_ = offline;
 	if (offline) {
-		std::cout << "[Offline Mode] Mock data generator enabled" << std::endl;
+		std::cout << "[BinanceHttp] Offline mode enabled" << std::endl;
+	} else {
+		std::cout << "[BinanceHttp] Offline mode disabled" << std::endl;
 	}
 }
 
@@ -94,7 +96,7 @@ bool BinanceHttp::isOfflineMode() const {
 
 void BinanceHttp::setCsvDataPath(const std::string& path) {
 	csvDataPath_ = path;
-	std::cout << "[CSV Mode] Data path set to: " << path << std::endl;
+	std::cout << "[BinanceHttp] CSV data path set to: " << path << std::endl;
 }
 
 std::string BinanceHttp::doRequest(const std::string &url, const std::string &method, const std::string &body, const std::string &headers) {
@@ -134,25 +136,50 @@ std::string BinanceHttp::doRequest(const std::string &url, const std::string &me
 }
 
 nlohmann::json BinanceHttp::getKlines(const std::string &symbol, const std::string &interval, int limit) {
+	std::cout << "[BinanceHttp] getKlines symbol=" << symbol << " interval=" << interval << " limit=" << limit
+		<< " csvPathSet=" << (!csvDataPath_.empty()) << " offlineMode=" << offlineMode_ << std::endl;
 	// CSV mode: load from CSV file
 	if (!csvDataPath_.empty()) {
-		std::cout << "[CSV] Loading data from: " << csvDataPath_ << " with limit=" << limit << std::endl;
-		return CsvKlineLoader::loadFromCsv(csvDataPath_, limit);
+		std::cout << "[BinanceHttp][CSV] Loading data from: " << csvDataPath_ << std::endl;
+		int sourceLimit = limit;
+		if (interval == "4h") sourceLimit = limit * 4;
+		else if (interval == "1d") sourceLimit = limit * 24;
+		std::cout << "[BinanceHttp][CSV] sourceLimit=" << sourceLimit << std::endl;
+		auto data = CsvKlineLoader::loadFromCsv(csvDataPath_, sourceLimit);
+		std::cout << "[BinanceHttp][CSV] loaded rows=" << data.size() << std::endl;
+		if (interval == "1h") {
+			std::cout << "[BinanceHttp][CSV] returning 1h data rows=" << data.size() << std::endl;
+			return data;
+		}
+		if (interval == "4h") {
+			auto agg = CsvKlineLoader::aggregateKlines(data, 4);
+			std::cout << "[BinanceHttp][CSV] returning 4h data rows=" << agg.size() << std::endl;
+			return agg;
+		}
+		if (interval == "1d") {
+			auto agg = CsvKlineLoader::aggregateKlines(data, 24);
+			std::cout << "[BinanceHttp][CSV] returning 1d data rows=" << agg.size() << std::endl;
+			return agg;
+		}
+		std::cout << "[BinanceHttp][CSV] returning raw data rows=" << data.size() << std::endl;
+		return data;
 	}
 
 	// Offline mode: use mock data
 	if (offlineMode_) {
-		std::cout << "[Offline] Generating " << limit << " candles of " << interval << std::endl;
+		std::cout << "[BinanceHttp][Mock] Generating " << limit << " candles of " << interval << std::endl;
 		return MockDataGenerator::generateKlines(symbol, interval, limit, 50000.0, 0.02);
 	}
 
 	// Online mode: fetch from Binance API
+	std::cout << "[BinanceHttp][Online] Fetching from Binance REST API" << std::endl;
 	std::ostringstream oss;
 	oss << baseUrl_ << "/fapi/v1/klines?symbol=" << symbol << "&interval=" << interval << "&limit=" << limit;
 	std::string res = doRequest(oss.str(), "GET", "", "");
 	try {
 		return nlohmann::json::parse(res);
 	} catch(...) {
+		std::cerr << "[BinanceHttp][Error] Failed to parse API response" << std::endl;
 		return nlohmann::json::array();
 	}
 }

@@ -74,5 +74,6 @@ Testing/
 
 # Testing
 data/
+reports/
 config.json
 run_backtest.flag

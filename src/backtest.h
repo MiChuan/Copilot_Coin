@@ -29,7 +29,9 @@ class Backtest {
 public:
 	Backtest(class BinanceHttp *api, Strategy *strategy);
 	BacktestResult run(int hoursBack, double feePerc=0.0004, double slippagePerc=0.0005, double leverage=3.0, double initialBalance=1000.0);
+	BacktestResult runFrom1hKlines(const nlohmann::json& klines, double feePerc=0.0004, double slippagePerc=0.0005, double leverage=3.0, double initialBalance=1000.0);
 private:
+	BacktestResult runOnKlines(const nlohmann::json& allK, double feePerc, double slippagePerc, double leverage, double initialBalance);
 	BinanceHttp *api_;
 	Strategy *strategy_;
 };
