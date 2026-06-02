@@ -5,6 +5,7 @@
 #include "binance_http.h"
 #include "strategy.h"
 #include "executor.h"
+#include "backtest.h"
 #include <nlohmann/json.hpp>
 
 int main(int argc, char** argv){

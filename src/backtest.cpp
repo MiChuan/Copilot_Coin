@@ -6,7 +6,7 @@
 Backtest::Backtest(BinanceHttp *api, Strategy *strategy)
 	: api_(api), strategy_(strategy) {}
 
-BacktestResult Backtest::run(int hoursBack, double feePerc, double slippagePerc, double leverage) {
+BacktestResult Backtest::run(int hoursBack, double feePerc, double slippagePerc, double leverage, double initialBalance) {
 	BacktestResult res;
 	// Approximate number of 4h candles
 	int candles = hoursBack / 4;
@@ -18,7 +18,7 @@ BacktestResult Backtest::run(int hoursBack, double feePerc, double slippagePerc,
 		int toFetch = std::min(per, candles - fetched);
 		auto k = api_->getKlines("BTCUSDT", "4h", toFetch);
 		if(!k.is_array() || k.empty()) break;
-		for(auto &it: k) allK.push_back(it);
+		for(auto &it : k) allK.push_back(it);
 		fetched += (int)k.size();
 		if((int)k.size() < toFetch) break;
 	}
