@@ -8,8 +8,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(FetchContent)
 FetchContent_Declare(
   nlohmann_json
-  GIT_REPOSITORY https://github.com/nlohmann/json.git
-  GIT_TAG v3.11.2
+	# Use release tarball to avoid fetching via git (download release archive directly)
+  URL https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.tar.gz
+  # optional: provide a hash to verify the download
+  # URL_HASH SHA256=PLACEHOLDER
 )
 FetchContent_MakeAvailable(nlohmann_json)
 
