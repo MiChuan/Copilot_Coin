@@ -232,3 +232,36 @@ nlohmann::json Executor::marketSell(const std::string &symbol, double usdtAmount
 	}
 	return res;
 }
+
+nlohmann::json Executor::marketSellQty(const std::string &symbol, double qty) {
+	if(!adjustQtyToStepAndMin(symbol, qty)) {
+		qty = std::floor(qty*1000.0)/1000.0;
+	}
+	std::ostringstream params;
+	params<<"symbol="<<symbol<<"&side=SELL&type=MARKET&quantity="<<qty;
+	auto res = api_->postSigned("/fapi/v1/order", params.str());
+	if(res.contains("status") && res["status"]=="FILLED") {
+		if(res.contains("executedQty") && res.contains("avgPrice")){
+			double exQty = std::stod(res["executedQty"].get<std::string>());
+			double avgP = std::stod(res["avgPrice"].get<std::string>());
+			handleFill(symbol, exQty, avgP, false);
+		}
+		return res;
+	}
+	if(res.contains("orderId")){
+		long long oid = res["orderId"].get<long long>();
+		for(int i=0;i<10;i++){
+			auto r2 = api_->getOrder(symbol, oid);
+			if(r2.contains("status") && r2["status"]=="FILLED") {
+				if(r2.contains("executedQty") && r2.contains("avgPrice")){
+					double exQty = std::stod(r2["executedQty"].get<std::string>());
+					double avgP = r2.contains("avgPrice") ? std::stod(r2["avgPrice"].get<std::string>()) : std::stod(r2["price"].get<std::string>());
+					handleFill(symbol, exQty, avgP, false);
+				}
+				return r2;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		}
+	}
+	return res;
+}

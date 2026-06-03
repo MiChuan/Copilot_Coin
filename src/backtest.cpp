@@ -43,21 +43,33 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 	double balance = initialBalance;
 	double position = 0.0;
 	double entryPrice = 0.0;
+	double originalQty = 0.0;
+	double totalEntryFee = 0.0;
+	long long entryTime = 0;
+	bool tp1_triggered = false;
+	bool tp2_triggered = false;
+	bool sl_triggered = false;
 	std::vector<double> equity;
 	std::vector<long long> times;
 	std::vector<double> returns;
 	std::vector<double> closes;
 	std::vector<double> vols;
+	std::vector<double> highs;
+	std::vector<double> lows;
 	std::vector<double> dailyCloses;
 
 	for (size_t i = 0; i < allK.size(); i++) {
 		try {
 			double price = std::stod(allK[i][4].get<std::string>());
 			double volume = std::stod(allK[i][5].get<std::string>());
+			double high = std::stod(allK[i][2].get<std::string>());
+			double low = std::stod(allK[i][3].get<std::string>());
 			long long time = allK[i][0].get<long long>();
 
 			closes.push_back(price);
 			vols.push_back(volume);
+			highs.push_back(high);
+			lows.push_back(low);
 			if ((i + 1) % 24 == 0) {
 				dailyCloses.push_back(price);
 			}
@@ -83,6 +95,8 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 			MarketState ms;
 			ms.close_4h = closes;
 			ms.vol_4h = vols;
+			ms.high_4h = highs;
+			ms.low_4h = lows;
 			ms.close_1d = dailyCloses;
 
 			auto sig = strategy_->evaluate(ms);
@@ -91,16 +105,108 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 			}
 
 			if (sig.buy && position == 0.0) {
-				double usdt = balance * 0.8;
+				double usdt = balance * 0.3;
 				double effectivePrice = price * (1.0 + slippagePerc);
 				double qty = (usdt * leverage) / effectivePrice;
 				double entryFee = usdt * feePerc;
 				position = qty;
+				originalQty = qty;
 				entryPrice = effectivePrice;
+				entryTime = time;
+				totalEntryFee = entryFee;
+				tp1_triggered = false;
+				tp2_triggered = false;
+				sl_triggered = false;
 				balance -= entryFee;
-				TradeRecord tr; tr.entryTime = time; tr.entryPrice = entryPrice; tr.qty = qty; tr.entryFee = entryFee;
-				res.tradesRec.push_back(tr);
 				std::cout << "[Backtest][TradeOpen] time=" << time << " price=" << effectivePrice << " qty=" << qty << " entryFee=" << entryFee << " balance=" << balance << std::endl;
+			}
+
+			// ===== 分批止盈检查 =====
+			if (position > 0.0) {
+				double profitPct = (price - entryPrice) / entryPrice;
+
+				// TP1: 盈利 ≥ 8%，平仓原始仓位的 50%（不超过当前仓位）
+				if (!tp1_triggered && profitPct >= 0.08) {
+					double closeQty = std::min(originalQty * 0.5, position);
+					if (closeQty > 0.0) {
+						double exitEffPrice = price * (1.0 - slippagePerc);
+						double gross = closeQty * exitEffPrice;
+						double exitFee = gross * feePerc;
+						double pnl = (exitEffPrice - entryPrice) * closeQty;
+						balance += (gross / leverage) + pnl;
+						balance -= exitFee;
+						position -= closeQty;
+						tp1_triggered = true;
+
+						TradeRecord tr;
+						tr.entryTime = entryTime;
+						tr.exitTime = time;
+						tr.entryPrice = entryPrice;
+						tr.exitPrice = exitEffPrice;
+						tr.qty = closeQty;
+						double propEntryFee = (originalQty > 0) ? totalEntryFee * (closeQty / originalQty) : 0.0;
+						tr.entryFee = propEntryFee;
+						tr.exitFee = exitFee;
+						tr.pnl = pnl - propEntryFee - exitFee;
+						res.tradesRec.push_back(tr);
+
+						std::cout << "[Backtest][TP1] time=" << time << " profitPct=" << profitPct * 100 << "% closeQty=" << closeQty << " remainQty=" << position << " pnl=" << tr.pnl << std::endl;
+					}
+				}
+
+				// TP2: 盈利 ≥ 15%，平仓剩余仓位的 50%
+				if (!tp2_triggered && position > 0.0 && profitPct >= 0.15) {
+					double closeQty = position * 0.5;
+					double exitEffPrice = price * (1.0 - slippagePerc);
+					double gross = closeQty * exitEffPrice;
+					double exitFee = gross * feePerc;
+					double pnl = (exitEffPrice - entryPrice) * closeQty;
+					balance += (gross / leverage) + pnl;
+					balance -= exitFee;
+					position -= closeQty;
+					tp2_triggered = true;
+
+					TradeRecord tr;
+					tr.entryTime = entryTime;
+					tr.exitTime = time;
+					tr.entryPrice = entryPrice;
+					tr.exitPrice = exitEffPrice;
+					tr.qty = closeQty;
+					double propEntryFee = (originalQty > 0) ? totalEntryFee * (closeQty / originalQty) : 0.0;
+					tr.entryFee = propEntryFee;
+					tr.exitFee = exitFee;
+					tr.pnl = pnl - propEntryFee - exitFee;
+					res.tradesRec.push_back(tr);
+
+					std::cout << "[Backtest][TP2] time=" << time << " profitPct=" << profitPct * 100 << "% closeQty=" << closeQty << " remainQty=" << position << " pnl=" << tr.pnl << std::endl;
+				}
+
+				// SL: 浮亏 >= 2.5%，平仓当前仓位的 80%
+				if (!sl_triggered && profitPct <= -0.025) {
+					double closeQty = position * 0.8;
+					double exitEffPrice = price * (1.0 - slippagePerc);
+					double gross = closeQty * exitEffPrice;
+					double exitFee = gross * feePerc;
+					double pnl = (exitEffPrice - entryPrice) * closeQty;
+					balance += (gross / leverage) + pnl;
+					balance -= exitFee;
+					position -= closeQty;
+					sl_triggered = true;
+
+					TradeRecord tr;
+					tr.entryTime = entryTime;
+					tr.exitTime = time;
+					tr.entryPrice = entryPrice;
+					tr.exitPrice = exitEffPrice;
+					tr.qty = closeQty;
+					double propEntryFee = (originalQty > 0) ? totalEntryFee * (closeQty / originalQty) : 0.0;
+					tr.entryFee = propEntryFee;
+					tr.exitFee = exitFee;
+					tr.pnl = pnl - propEntryFee - exitFee;
+					res.tradesRec.push_back(tr);
+
+					std::cout << "[Backtest][SL] time=" << time << " lossPct=" << profitPct * 100 << "% closeQty=" << closeQty << " remainQty=" << position << " pnl=" << tr.pnl << std::endl;
+				}
 			}
 
 			if (sig.sell && position > 0.0) {
@@ -110,13 +216,28 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 				double pnl = (effectivePrice - entryPrice) * position;
 				balance += (gross / leverage) + pnl;
 				balance -= exitFee;
-				if (!res.tradesRec.empty()) {
-					auto &tr = res.tradesRec.back();
-					tr.exitTime = time; tr.exitPrice = effectivePrice; tr.exitFee = exitFee; tr.pnl = pnl - tr.entryFee - exitFee;
-				}
+
+				TradeRecord tr;
+				tr.entryTime = entryTime;
+				tr.exitTime = time;
+				tr.entryPrice = entryPrice;
+				tr.exitPrice = effectivePrice;
+				tr.qty = position;
+				double propEntryFee = (originalQty > 0) ? totalEntryFee * (position / originalQty) : 0.0;
+				tr.entryFee = propEntryFee;
+				tr.exitFee = exitFee;
+				tr.pnl = pnl - propEntryFee - exitFee;
+				res.tradesRec.push_back(tr);
+
 				std::cout << "[Backtest][TradeClose] time=" << time << " price=" << effectivePrice << " gross=" << gross << " pnl=" << pnl << " exitFee=" << exitFee << " balance=" << balance << std::endl;
 				position = 0.0;
+				originalQty = 0.0;
 				entryPrice = 0.0;
+				entryTime = 0;
+				totalEntryFee = 0.0;
+				tp1_triggered = false;
+				tp2_triggered = false;
+				sl_triggered = false;
 			}
 
 			double netEquity = balance + (position > 0.0 ? (position * price / leverage) : 0.0);
@@ -138,11 +259,20 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 			double pnl = (effectivePrice - entryPrice) * position;
 			balance += (gross / leverage) + pnl;
 			balance -= exitFee;
-			if (!res.tradesRec.empty()) {
-				auto &tr = res.tradesRec.back();
-				tr.exitTime = allK.back()[0].get<long long>(); tr.exitPrice = effectivePrice; tr.exitFee = exitFee; tr.pnl = pnl - tr.entryFee - exitFee;
-			}
-			std::cout << "[Backtest][ForceClose] lastPrice=" << lastPrice << " effectivePrice=" << effectivePrice << " balance=" << balance << std::endl;
+
+			TradeRecord tr;
+			tr.entryTime = entryTime;
+			tr.exitTime = allK.back()[0].get<long long>();
+			tr.entryPrice = entryPrice;
+			tr.exitPrice = effectivePrice;
+			tr.qty = position;
+			double propEntryFee = (originalQty > 0) ? totalEntryFee * (position / originalQty) : 0.0;
+			tr.entryFee = propEntryFee;
+			tr.exitFee = exitFee;
+			tr.pnl = pnl - propEntryFee - exitFee;
+			res.tradesRec.push_back(tr);
+
+			std::cout << "[Backtest][ForceClose] lastPrice=" << lastPrice << " effectivePrice=" << effectivePrice << " remainQty=" << position << " balance=" << balance << std::endl;
 		} catch (const std::exception& e) {
 			std::cerr << "[Backtest][Error] finalizing open position failed: " << e.what() << std::endl;
 		}

@@ -20,6 +20,7 @@ public:
 	bool adjustQtyToStepAndMin(const std::string &symbol, double &qty);
 	nlohmann::json marketBuy(const std::string &symbol, double usdtAmount, double leverage);
 	nlohmann::json marketSell(const std::string &symbol, double usdtAmount, double leverage);
+	nlohmann::json marketSellQty(const std::string &symbol, double qty);
 	// in-memory position tracking
 	Position getLocalPosition(const std::string &symbol);
 	void handleFill(const std::string &symbol, double executedQty, double executedPrice, bool isBuy);

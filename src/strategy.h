@@ -8,6 +8,8 @@ struct MarketState {
 	std::vector<double> close_4h;
 	std::vector<double> close_1d;
 	std::vector<double> vol_4h;
+	std::vector<double> high_4h;
+	std::vector<double> low_4h;
 };
 
 struct Signal {

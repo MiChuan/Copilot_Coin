@@ -79,4 +79,33 @@ Bollinger bollinger(const std::vector<double>& closes, int period, double k) {
 	return b;
 }
 
+std::vector<double> atr(const std::vector<double>& high, const std::vector<double>& low, const std::vector<double>& close, int period) {
+	std::vector<double> out;
+	size_t n = close.size();
+	if(high.size() != n || low.size() != n || (int)n <= period) return out;
+
+	// 计算每根K线的真实波幅 TR = max(H-L, |H-Cp|, |L-Cp|)
+	std::vector<double> tr;
+	tr.push_back(high[0] - low[0]); // 第一根只有 H-L
+	for(size_t i = 1; i < n; i++) {
+		double hl = high[i] - low[i];
+		double hc = std::abs(high[i] - close[i-1]);
+		double lc = std::abs(low[i] - close[i-1]);
+		tr.push_back(std::max({hl, hc, lc}));
+	}
+
+	// 第一个 ATR = SMA(TR, period)
+	double sum = 0;
+	for(int i = 0; i < period; i++) sum += tr[i];
+	double prev = sum / period;
+	out.push_back(prev);
+
+	// 后续 ATR = (prev*(period-1) + TR) / period
+	for(size_t i = period; i < tr.size(); i++) {
+		prev = (prev * (period - 1) + tr[i]) / period;
+		out.push_back(prev);
+	}
+	return out;
+}
+
 }

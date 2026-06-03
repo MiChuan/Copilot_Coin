@@ -251,8 +251,8 @@ int main(int argc, char** argv){
 
 	BinanceHttp api(apiKey, secret, true);
 	Strategy strat;
-	Executor exe(&api, 3.0);
-	exe.setLeverage(3);
+	Executor exe(&api, 2.0);
+	exe.setLeverage(2);
 	std::cout << "[Main] BinanceHttp/Strategy/Executor initialized" << std::endl;
 
 	if (opt.offlineMode) {
@@ -299,26 +299,106 @@ int main(int argc, char** argv){
 		return 0;
 	}
 
+	// TP / SL 状态追踪
+	double tpOriginalQty = 0.0;
+	bool tp1Live = false;
+	bool tp2Live = false;
+	bool slLive = false;
+
 	while(true) {
 		MarketState s;
 		auto k4 = api.getKlines("BTCUSDT", "4h", 500);
 		auto kd = api.getKlines("BTCUSDT", "1d", 500);
 		if(k4.is_array()){
-			for(auto &k: k4){ s.close_4h.push_back(std::stod(k[4].get<std::string>())); s.vol_4h.push_back(std::stod(k[5].get<std::string>())); }
+			for(auto &k: k4){
+				s.close_4h.push_back(std::stod(k[4].get<std::string>()));
+				s.vol_4h.push_back(std::stod(k[5].get<std::string>()));
+				s.high_4h.push_back(std::stod(k[2].get<std::string>()));
+				s.low_4h.push_back(std::stod(k[3].get<std::string>()));
+			}
 		}
 		if(kd.is_array()){
 			for(auto &k: kd) s.close_1d.push_back(std::stod(k[4].get<std::string>()));
 		}
 		auto sig = strat.evaluate(s);
+
+		// ===== 分批止盈检查 =====
+		Position pos = exe.getLocalPosition("BTCUSDT");
+		if(pos.qty > 0.0 && pos.avgPrice > 0.0) {
+			auto k1 = api.getKlines("BTCUSDT", "1m", 1);
+			if(k1.is_array() && !k1.empty()) {
+				double curPrice = std::stod(k1[0][4].get<std::string>());
+				double profitPct = (curPrice - pos.avgPrice) / pos.avgPrice;
+
+				// 首次开仓时记录原始仓位
+				if(tpOriginalQty <= 0.0) {
+					tpOriginalQty = pos.qty;
+					tp1Live = false;
+					tp2Live = false;
+					slLive = false;
+				}
+
+				// TP1: 盈利 >= 8%，平仓原始仓位的 50%
+				if(!tp1Live && profitPct >= 0.08) {
+					double closeQty = tpOriginalQty * 0.5;
+					if(closeQty > 0.0 && closeQty <= pos.qty) {
+						std::cout << "[Live][TP1] profitPct=" << profitPct*100 << "% closeQty=" << closeQty << std::endl;
+						auto resp = exe.marketSellQty("BTCUSDT", closeQty);
+						std::cout << "[Live][TP1] exec: " << resp.dump() << std::endl;
+						tp1Live = true;
+					}
+				}
+
+				// TP2: 盈利 >= 15%，平仓剩余仓位的 50%
+				if(!tp2Live && profitPct >= 0.15) {
+					Position pos2 = exe.getLocalPosition("BTCUSDT");
+					double closeQty = pos2.qty * 0.5;
+					if(closeQty > 0.0) {
+						std::cout << "[Live][TP2] profitPct=" << profitPct*100 << "% closeQty=" << closeQty << " remainQty=" << pos2.qty << std::endl;
+						auto resp = exe.marketSellQty("BTCUSDT", closeQty);
+						std::cout << "[Live][TP2] exec: " << resp.dump() << std::endl;
+						tp2Live = true;
+					}
+				}
+
+				// SL: 浮亏 >= 2.5%，平仓当前仓位的 80%
+				if(!slLive && profitPct <= -0.025) {
+					Position posSL = exe.getLocalPosition("BTCUSDT");
+					double closeQty = posSL.qty * 0.8;
+					if(closeQty > 0.0) {
+						std::cout << "[Live][SL] lossPct=" << profitPct*100 << "% closeQty=" << closeQty << " remainQty=" << posSL.qty << std::endl;
+						auto resp = exe.marketSellQty("BTCUSDT", closeQty);
+						std::cout << "[Live][SL] exec: " << resp.dump() << std::endl;
+						slLive = true;
+					}
+				}
+			}
+		} else {
+			// 无持仓时重置止盈/止损状态
+			tpOriginalQty = 0.0;
+			tp1Live = false;
+			tp2Live = false;
+			slLive = false;
+		}
+
 		if(sig.buy){
 			double usable = 100.0;
-			auto resp = exe.marketBuy("BTCUSDT", usable*0.8, 3.0);
+			auto resp = exe.marketBuy("BTCUSDT", usable*0.3, 2.0);
 			std::cout<<"Buy exec: "<<resp.dump()<<" reason="<<sig.reason<<std::endl;
+			// 重置止盈/止损状态，等待下一轮更新
+			tpOriginalQty = 0.0;
+			tp1Live = false;
+			tp2Live = false;
+			slLive = false;
 		}
 		if(sig.sell){
 			double usable = 100.0;
-			auto resp = exe.marketSell("BTCUSDT", usable*0.8, 3.0);
+			auto resp = exe.marketSell("BTCUSDT", usable*0.3, 2.0);
 			std::cout<<"Sell exec: "<<resp.dump()<<" reason="<<sig.reason<<std::endl;
+			tpOriginalQty = 0.0;
+			tp1Live = false;
+			tp2Live = false;
+			slLive = false;
 		}
 		std::this_thread::sleep_for(std::chrono::minutes(1));
 	}

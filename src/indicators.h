@@ -10,4 +10,7 @@ void macd(const std::vector<double>& closes, std::vector<double>& macdLine, std:
 
 struct Bollinger { double upper; double middle; double lower; };
 Bollinger bollinger(const std::vector<double>& closes, int period=20, double k=2.0);
+
+// ATR(14): 使用 high/low/close 计算平均真实波幅
+std::vector<double> atr(const std::vector<double>& high, const std::vector<double>& low, const std::vector<double>& close, int period=14);
 }
