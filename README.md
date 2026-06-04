@@ -1,6 +1,6 @@
 # Copilot_Coin
 
-基于 C++ 的 BTCUSDT 合约量化交易系统，支持多时间框架技术分析、离线回测与实盘执行。
+基于 C++ 的 BTCUSDT 合约量化交易系统，支持多时间框架技术分析、离线回测与 **Binance Demo** 实盘测试。
 
 ## 策略概述
 
@@ -41,7 +41,7 @@
 ### 风控参数
 
 - 杠杆：2x
-- 单笔仓位：总资金 30%（最大 90%）
+- 单笔仓位：总资金 30%（`live.positionPct`）
 - TP1：盈利 ≥ 8% 平仓 50%
 - TP2：盈利 ≥ 15% 平仓剩余 50%
 - SL：亏损 ≥ 2.5% 平仓 80%
@@ -61,21 +61,21 @@
 ```
 Copilot_Coin/
 ├── src/
-│   ├── main.cpp              # 入口：实盘/回测分支
-│   ├── strategy.cpp/h        # 策略信号引擎
-│   ├── indicators.cpp/h      # 技术指标（SMA/EMA/RSI/MACD/BOLL/ATR）
-│   ├── backtest.cpp/h        # 回测引擎 + 风控
-│   ├── executor.cpp/h        # 实盘执行器
-│   ├── binance_http.cpp/h    # 币安 HTTP API
-│   ├── csv_kline_loader.cpp/h # CSV 数据加载
-│   ├── util.cpp/h            # 工具函数
-│   └── mock_data_generator.cpp/h # 模拟数据生成
-├── data/
-│   ├── BTCUSDT_1h.csv        # 1h 历史 K 线
-│   └── BTCUSDT_1m_20250301_20260302.csv  # 1m 粒度 K 线
-├── reports/                  # 回测报表（运行时生成）
-├── config.json               # API 与回测配置
-├── run_test.ps1              # 一键编译 + 回测脚本
+│   ├── main.cpp                 # 入口：Demo 实盘 / 回测
+│   ├── strategy.cpp/h           # 策略信号引擎
+│   ├── indicators.cpp/h       # 技术指标
+│   ├── backtest.cpp/h           # 回测引擎
+│   ├── executor.cpp/h           # 实盘下单
+│   ├── binance_http.cpp/h       # 币安 Futures API（含代理）
+│   ├── test_demo_api.cpp        # API 端点连通性测试
+│   └── csv_kline_loader.cpp/h   # CSV 加载与聚合
+├── data/                        # K 线 CSV（本地，不入库）
+├── reports/                     # 回测报表（运行时生成）
+├── config.json                  # 本地配置（不入库，含密钥）
+├── config_demo_live.json        # Demo 实盘配置模板
+├── run_test.ps1                 # 编译 + 回测
+├── run_demo_live.ps1            # 编译 + Demo API 测试 + 实盘
+├── test_api_endpoints.ps1       # PowerShell 公开接口测试
 └── CMakeLists.txt
 ```
 
@@ -84,8 +84,8 @@ Copilot_Coin/
 ### 依赖
 
 - CMake 3.16+
-- Visual Studio 2022 或兼容的 C++ 编译工具链
-- vcpkg 管理依赖：
+- Visual Studio 2022 或兼容 C++ 工具链
+- vcpkg：
 
 ```powershell
 git clone https://github.com/microsoft/vcpkg.git
@@ -93,50 +93,108 @@ git clone https://github.com/microsoft/vcpkg.git
 .\vcpkg\vcpkg.exe install nlohmann-json curl[openssl]:x64-windows openssl:x64-windows
 ```
 
+### 网络代理（可选）
+
+访问 `demo-fapi.binance.com` 或 testnet 若需代理，在 `config.json` 设置：
+
+```json
+"httpProxy": "http://127.0.0.1:7897"
+```
+
+或在 PowerShell 中：
+
+```powershell
+$env:HTTP_PROXY = "http://127.0.0.1:7897"
+$env:HTTPS_PROXY = "http://127.0.0.1:7897"
+```
+
 ## 构建
 
 ```powershell
-mkdir build && cd build
-cmake .. -A x64 -DCMAKE_TOOLCHAIN_FILE=../vcpkg/scripts/buildsystems/vcpkg.cmake
-cmake --build . --config Release
+cmake -S . -B build -A x64
+cmake --build build --config Release
 ```
+
+产物：
+
+- `build/Release/Copilot_Coin.exe` — 主程序
+- `build/Release/test_demo_api.exe` — API 测试
 
 ## 运行
 
-### 一键编译 + 回测
+### 回测
 
 ```powershell
 .\run_test.ps1 -Release -Report
 ```
 
-参数说明：
-
-| 参数 | 作用 |
-|------|------|
-| `-Release` | Release 配置 |
-| `-SkipBuild` | 跳过编译 |
-| `-Report` | 生成回测报表 |
-| `-Clean` | 清理旧报表 |
-| `-OpenResults` | 自动打开结果 |
-
-### CLI 命令
+或：
 
 ```powershell
-# 使用 1h CSV
-.\build\Release\Copilot_Coin.exe backtest report --csvPath "data\BTCUSDT_1h.csv"
-
-# 使用 1m CSV（需在 config.json 设置 csvInterval: "1m"）
-.\build\Release\Copilot_Coin.exe backtest report --csvPath "data\BTCUSDT_1m_20250301_20260302.csv"
+.\build\Release\Copilot_Coin.exe backtest
 ```
+
+`config.json` 中 `backtest.mode` 为 `report` 时生成 `reports/` 报表；`csvInterval: "1m"` 时自动聚合为 1h。
+
+### Demo 实盘（[demo.binance.com](https://demo.binance.com)）
+
+1. 在 **Demo 站**（非主站）创建 API Key，启用合约权限。
+2. 复制 `config_demo_live.json` 为 `config.json`，填入 `apiKey` / `secret`。
+3. 测试 API：
+
+```powershell
+.\run_demo_live.ps1 -TestOnly
+# 或
+.\build\Release\test_demo_api.exe
+```
+
+4. 启动策略循环（会按信号下单）：
+
+```powershell
+.\run_demo_live.ps1
+# 或
+.\build\Release\Copilot_Coin.exe
+```
+
+> **不要** 带 `backtest` 参数，否则进入回测模式。
+
+### PowerShell 公开接口快测
+
+```powershell
+.\test_api_endpoints.ps1
+.\test_api_endpoints.ps1 -BaseUrl "https://testnet.binancefuture.com"
+```
+
+## API 端点
+
+| 类型 | 端点 | 说明 |
+|------|------|------|
+| 公开 | `/fapi/v1/time` | 服务器时间 |
+| 公开 | `/fapi/v1/exchangeInfo` | 交易规则 |
+| 公开 | `/fapi/v1/ticker/price` | 最新价 |
+| 公开 | `/fapi/v1/depth` | 深度 |
+| 公开 | `/fapi/v1/klines` | K 线 |
+| 签名 | `/fapi/v2/account` | 账户信息（程序使用） |
+| 签名 | `/fapi/v2/balance` | 资产余额（程序使用） |
+
+Demo 环境 Base URL：`https://demo-fapi.binance.com`
 
 ## 配置文件
 
-`config.json`：
+参考 `config_demo_live.json`（勿将含真实密钥的 `config.json` 提交到 Git）：
 
 ```json
 {
-  "apiKey": "YOUR_API_KEY",
-  "secret": "YOUR_SECRET",
+  "apiKey": "YOUR_DEMO_API_KEY",
+  "secret": "YOUR_DEMO_SECRET",
+  "useDemo": true,
+  "demoApiBaseUrl": "https://demo-fapi.binance.com",
+  "demoApiHost": "",
+  "httpProxy": "http://127.0.0.1:7897",
+  "live": {
+    "leverage": 2.0,
+    "positionPct": 0.3
+  },
   "backtest": {
     "initialBalance": 1000.0,
     "feePerc": 0.0004,
@@ -144,7 +202,7 @@ cmake --build . --config Release
     "leverage": 2.0,
     "hoursBack": 8760,
     "mode": "report",
-    "csvPath": "data/BTCUSDT_1h.csv",
+    "csvPath": "data/BTCUSDT_1m_20250301_20260302.csv",
     "csvInterval": "1m"
   }
 }
@@ -152,22 +210,28 @@ cmake --build . --config Release
 
 | 字段 | 说明 |
 |------|------|
-| `csvPath` | CSV 数据文件路径 |
-| `csvInterval` | 源数据粒度，如 `"1m"`、`"1h"`，回测会自动聚合成 1h |
+| `useDemo` | `true` 使用 Demo Futures API |
+| `httpProxy` | HTTP/HTTPS 代理地址 |
+| `live.positionPct` | 单笔占用钱包余额比例 |
+| `live.leverage` | 合约杠杆 |
+| `backtest.csvPath` | 回测 CSV 路径 |
+| `backtest.csvInterval` | 源粒度，`1m` 会聚合为 1h |
+| `backtest.mode` | `report` / `offline` / `run`（仅回测生效） |
 
 ## 回测输出
 
-`reports/` 目录下生成：
+`reports/` 目录：
 
-- `bt_summary.json` — 汇总指标（胜率、回撤、最终资金等）
+- `bt_summary.json` — 汇总指标
 - `bt_equity.csv` — 权益曲线
-- `bt_trades.csv` — 逐笔交易明细
+- `bt_trades.csv` — 交易明细
 
 ## 注意事项
 
-- 本项目用于研究和测试，不包含完整生产级风控
-- 实盘前建议先在 Binance Futures Testnet 验证
-- 回测包含手续费与滑点模拟，但不覆盖所有真实交易细节
+- 本项目用于研究与测试，非生产级风控。
+- Demo 与 Testnet、主网 API Key **不可混用**。
+- 实盘循环使用 **1h K 线**，与回测一致；轮询间隔 60 分钟。
+- `config.json` 已在 `.gitignore` 中，请勿提交真实密钥。
 
 ## 仓库地址
 

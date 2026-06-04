@@ -27,11 +27,16 @@ namespace {
 		CommandType command = CommandType::Live;
 		BacktestMode backtestMode = BacktestMode::Run;
 		bool offlineMode = false;
+		bool useDemo = false;
 		std::string csvPath;
+		std::string demoApiBaseUrl;
+		std::string demoApiHost;
+		std::string httpProxy;
 		double initialBalance = 1000.0;
 		double feePerc = 0.0004;
 		double slippagePerc = 0.0005;
 		double leverage = 3.0;
+		double positionPct = 0.3;
 		int hoursBack = 24 * 365;
 	};
 
@@ -116,23 +121,34 @@ namespace {
 	void applyConfigOverrides(const nlohmann::json& cfg, CliOptions& opt, std::string& apiKey, std::string& secret) {
 		if (cfg.contains("apiKey")) apiKey = cfg.value("apiKey", apiKey);
 		if (cfg.contains("secret")) secret = cfg.value("secret", secret);
+		if (cfg.contains("useDemo")) opt.useDemo = cfg.value("useDemo", false);
+		if (cfg.contains("demoApiBaseUrl")) opt.demoApiBaseUrl = cfg.value("demoApiBaseUrl", opt.demoApiBaseUrl);
+		if (cfg.contains("demoApiHost")) opt.demoApiHost = cfg.value("demoApiHost", opt.demoApiHost);
+		if (cfg.contains("httpProxy")) opt.httpProxy = cfg.value("httpProxy", opt.httpProxy);
+		if (cfg.contains("live")) {
+			auto l = cfg["live"];
+			opt.leverage = l.value("leverage", opt.leverage);
+			opt.positionPct = l.value("positionPct", opt.positionPct);
+		}
 		if (cfg.contains("backtest")) {
 			auto b = cfg["backtest"];
-			opt.initialBalance = b.value("initialBalance", opt.initialBalance);
-			opt.feePerc = b.value("feePerc", opt.feePerc);
-			opt.slippagePerc = b.value("slippagePerc", opt.slippagePerc);
-			opt.leverage = b.value("leverage", opt.leverage);
-			if (b.contains("hoursBack")) {
-				opt.hoursBack = parseHoursBackValue(b["hoursBack"], opt.hoursBack);
-			}
-			opt.csvPath = b.value("csvPath", opt.csvPath);
-			std::string mode = b.value("mode", std::string("run"));
-			if (mode == "offline") {
-				opt.backtestMode = BacktestMode::Offline;
-				opt.offlineMode = true;
-			} else if (mode == "report") {
-				opt.backtestMode = BacktestMode::Report;
-				opt.offlineMode = true;
+			if (opt.command == CommandType::Backtest) {
+				opt.initialBalance = b.value("initialBalance", opt.initialBalance);
+				opt.feePerc = b.value("feePerc", opt.feePerc);
+				opt.slippagePerc = b.value("slippagePerc", opt.slippagePerc);
+				opt.leverage = b.value("leverage", opt.leverage);
+				if (b.contains("hoursBack")) {
+					opt.hoursBack = parseHoursBackValue(b["hoursBack"], opt.hoursBack);
+				}
+				opt.csvPath = b.value("csvPath", opt.csvPath);
+				std::string mode = b.value("mode", std::string("run"));
+				if (mode == "offline") {
+					opt.backtestMode = BacktestMode::Offline;
+					opt.offlineMode = true;
+				} else if (mode == "report") {
+					opt.backtestMode = BacktestMode::Report;
+					opt.offlineMode = true;
+				}
 			}
 		}
 	}
@@ -239,6 +255,7 @@ int main(int argc, char** argv){
 	applyConfigOverrides(cfg, opt, apiKey, secret);
 	std::cout << "[Main] Config applied: apiKeySet=" << (!apiKey.empty())
 		<< " secretSet=" << (!secret.empty())
+		<< " useDemo=" << opt.useDemo
 		<< " command=" << commandName(opt.command)
 		<< " mode=" << backtestModeName(opt.backtestMode)
 		<< " offline=" << opt.offlineMode
@@ -249,22 +266,27 @@ int main(int argc, char** argv){
 		<< " leverage=" << opt.leverage
 		<< " hoursBack=" << opt.hoursBack << std::endl;
 
-	BinanceHttp api(apiKey, secret, true);
+	BinanceHttp api(apiKey, secret, true, opt.useDemo);
+	if (opt.useDemo && !opt.demoApiBaseUrl.empty()) {
+		api.setDemoBaseUrl(opt.demoApiBaseUrl, opt.demoApiHost);
+	}
+	if (!opt.httpProxy.empty()) {
+		api.setHttpProxy(opt.httpProxy);
+	}
 	Strategy strat;
-	Executor exe(&api, 2.0);
-	exe.setLeverage(2);
-	std::cout << "[Main] BinanceHttp/Strategy/Executor initialized" << std::endl;
+	Executor exe(&api, opt.leverage);
+	exe.setLeverage(static_cast<int>(opt.leverage));
+	std::cout << "[Main] BinanceHttp/Strategy/Executor initialized (leverage=" << opt.leverage << ")" << std::endl;
 
-	if (opt.offlineMode) {
+	if (opt.command == CommandType::Backtest && opt.offlineMode) {
 		std::cout << "[Main] Enabling offline mode" << std::endl;
 		api.setOfflineMode(true);
 	}
-	if (!opt.csvPath.empty()) {
+	if (opt.command == CommandType::Backtest && !opt.csvPath.empty()) {
 		std::cout << "[Main] Setting CSV path: " << opt.csvPath << std::endl;
 		api.setCsvDataPath(opt.csvPath);
 	}
-	// Set CSV source interval for 1m->1h aggregation
-	if (cfg.contains("backtest") && cfg["backtest"].contains("csvInterval")) {
+	if (opt.command == CommandType::Backtest && cfg.contains("backtest") && cfg["backtest"].contains("csvInterval")) {
 		std::string csvInterval = cfg["backtest"]["csvInterval"].get<std::string>();
 		std::cout << "[Main] Setting CSV source interval: " << csvInterval << std::endl;
 		api.setCsvSourceInterval(csvInterval);
@@ -305,6 +327,22 @@ int main(int argc, char** argv){
 		return 0;
 	}
 
+	std::cout << "[Main] Demo live mode — fetching account from demo-fapi.binance.com" << std::endl;
+	auto acc = api.getFuturesAccount();
+	if (acc.contains("totalWalletBalance")) {
+		std::cout << "[Main] Wallet balance: " << acc["totalWalletBalance"].get<std::string>() << " USDT" << std::endl;
+		std::cout << "[Main] Available balance: " << acc.value("availableBalance", "n/a") << std::endl;
+		std::cout << "[Main] Unrealized PNL: " << acc.value("totalUnrealizedProfit", "n/a") << std::endl;
+	} else if (!acc.empty()) {
+		std::cout << "[Main] Account response: " << acc.dump() << std::endl;
+	} else {
+		std::cerr << "[Main][Warn] Could not read futures account. Check API key (from demo.binance.com) and network." << std::endl;
+	}
+	double walletBal = exe.getWalletBalance();
+	double availBal = exe.getAvailableUSDT();
+	std::cout << "[Main] Margin wallet=" << walletBal << " available(USDT+USDC)=" << availBal
+		<< " positionPct=" << opt.positionPct << std::endl;
+
 	// TP / SL 状态追踪
 	double tpOriginalQty = 0.0;
 	bool tp1Live = false;
@@ -313,10 +351,11 @@ int main(int argc, char** argv){
 
 	while(true) {
 		MarketState s;
-		auto k4 = api.getKlines("BTCUSDT", "4h", 500);
+		// 与回测一致：1h 执行 + 日线趋势（close_4h 字段名沿用，实际为 1h K 线）
+		auto k1h = api.getKlines("BTCUSDT", "1h", 500);
 		auto kd = api.getKlines("BTCUSDT", "1d", 500);
-		if(k4.is_array()){
-			for(auto &k: k4){
+		if(k1h.is_array()){
+			for(auto &k: k1h){
 				s.close_4h.push_back(std::stod(k[4].get<std::string>()));
 				s.vol_4h.push_back(std::stod(k[5].get<std::string>()));
 				s.high_4h.push_back(std::stod(k[2].get<std::string>()));
@@ -327,6 +366,9 @@ int main(int argc, char** argv){
 			for(auto &k: kd) s.close_1d.push_back(std::stod(k[4].get<std::string>()));
 		}
 		auto sig = strat.evaluate(s);
+
+		double orderMargin = walletBal * opt.positionPct;
+		if (orderMargin <= 0.0) orderMargin = availBal * opt.positionPct;
 
 		// ===== 分批止盈检查 =====
 		Position pos = exe.getLocalPosition("BTCUSDT");
@@ -388,9 +430,8 @@ int main(int argc, char** argv){
 		}
 
 		if(sig.buy){
-			double usable = 100.0;
-			auto resp = exe.marketBuy("BTCUSDT", usable*0.3, 2.0);
-			std::cout<<"Buy exec: "<<resp.dump()<<" reason="<<sig.reason<<std::endl;
+			auto resp = exe.marketBuy("BTCUSDT", orderMargin, opt.leverage);
+			std::cout<<"Buy exec: "<<resp.dump()<<" margin="<<orderMargin<<" reason="<<sig.reason<<std::endl;
 			// 重置止盈/止损状态，等待下一轮更新
 			tpOriginalQty = 0.0;
 			tp1Live = false;
@@ -398,15 +439,16 @@ int main(int argc, char** argv){
 			slLive = false;
 		}
 		if(sig.sell){
-			double usable = 100.0;
-			auto resp = exe.marketSell("BTCUSDT", usable*0.3, 2.0);
-			std::cout<<"Sell exec: "<<resp.dump()<<" reason="<<sig.reason<<std::endl;
+			auto resp = exe.marketSell("BTCUSDT", orderMargin, opt.leverage);
+			std::cout<<"Sell exec: "<<resp.dump()<<" margin="<<orderMargin<<" reason="<<sig.reason<<std::endl;
 			tpOriginalQty = 0.0;
 			tp1Live = false;
 			tp2Live = false;
 			slLive = false;
 		}
-		std::this_thread::sleep_for(std::chrono::minutes(1));
+		walletBal = exe.getWalletBalance();
+		availBal = exe.getAvailableUSDT();
+		std::this_thread::sleep_for(std::chrono::minutes(60));
 	}
 	return 0;
 }

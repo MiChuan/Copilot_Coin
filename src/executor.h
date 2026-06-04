@@ -16,6 +16,7 @@ public:
 	Executor(BinanceHttp *api, double leverage=3.0);
 	bool setLeverage(int lev);
 	double getAvailableUSDT();
+	double getWalletBalance();
 	nlohmann::json getPosition(const std::string &symbol);
 	bool adjustQtyToStepAndMin(const std::string &symbol, double &qty);
 	nlohmann::json marketBuy(const std::string &symbol, double usdtAmount, double leverage);

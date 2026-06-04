@@ -86,16 +86,33 @@ bool Executor::adjustQtyToStepAndMin(const std::string &symbol, double &qty) {
 
 double Executor::getAvailableUSDT() {
 	auto res = api_->getAccountBalance();
-	// res is array of balances with asset and balance; find USDT
 	double available = 0.0;
-	if(res.is_array()){
-		for(auto &b: res){
-			if(b.contains("asset") && b["asset"]=="USDT"){
-				if(b.contains("balance")) available = std::stod(b["balance"].get<std::string>());
+	if (res.is_array()) {
+		for (auto& b : res) {
+			if (!b.contains("asset")) continue;
+			const std::string asset = b["asset"].get<std::string>();
+			if (asset != "USDT" && asset != "USDC") continue;
+			double bal = 0.0;
+			if (b.contains("availableBalance")) {
+				bal = std::stod(b["availableBalance"].get<std::string>());
+			} else if (b.contains("balance")) {
+				bal = std::stod(b["balance"].get<std::string>());
 			}
+			available += bal;
 		}
 	}
 	return available;
+}
+
+double Executor::getWalletBalance() {
+	auto acc = api_->getFuturesAccount();
+	if (acc.contains("totalWalletBalance")) {
+		return std::stod(acc["totalWalletBalance"].get<std::string>());
+	}
+	if (acc.contains("totalMarginBalance")) {
+		return std::stod(acc["totalMarginBalance"].get<std::string>());
+	}
+	return getAvailableUSDT();
 }
 
 nlohmann::json Executor::marketBuy(const std::string &symbol, double usdtAmount, double leverage) {

@@ -1,0 +1,13 @@
+{
+  "apiKey": "YOUR_DEMO_API_KEY_FROM_demo.binance.com",
+  "secret": "YOUR_DEMO_SECRET_FROM_demo.binance.com",
+  "useDemo": true,
+  "demoApiBaseUrl": "https://demo-fapi.binance.com",
+  "live": {
+    "leverage": 2.0,
+    "positionPct": 0.3
+  },
+  "backtest": {
+    "mode": "run"
+  }
+}

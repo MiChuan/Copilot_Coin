@@ -1,0 +1,12 @@
+{
+  "apiKey": "YOUR_DEMO_API_KEY",
+  "secret": "YOUR_DEMO_SECRET",
+  "useDemo": true,
+  "backtest": {
+    "mode": "run",
+    "initialBalance": 10000.0,
+    "feePerc": 0.0004,
+    "slippagePerc": 0.0005,
+    "leverage": 2.0
+  }
+}

@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Í³Ò»ÓÃ find_package£¬ËùÓÐÒÀÀµ¶¼ÓÉ vcpkg Ìá¹©
+# Í³Ò»ï¿½ï¿½ find_packageï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ vcpkg ï¿½á¹©
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -40,6 +40,21 @@ add_executable(test_csv
 
 target_include_directories(test_csv PRIVATE src)
 
-target_link_libraries(test_csv PRIVATE
+# Test executable for Demo API
+add_executable(test_demo_api
+  src/test_demo_api.cpp
+  src/binance_http.cpp
+  src/util.cpp
+  src/mock_data_generator.cpp
+  src/csv_kline_loader.cpp
+)
+
+target_include_directories(test_demo_api PRIVATE src)
+
+target_link_libraries(test_demo_api PRIVATE
+  CURL::libcurl
+  OpenSSL::Crypto
   nlohmann_json::nlohmann_json
 )
+
+target_compile_definitions(test_demo_api PRIVATE -DSIMULATION=1)

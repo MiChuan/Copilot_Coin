@@ -5,6 +5,7 @@
 #include <curl/curl.h>
 #include <sstream>
 #include <iostream>
+#include <cstdlib>
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
 	((std::string*)userp)->append(static_cast<char*>(contents), size * nmemb);
@@ -26,9 +27,26 @@ nlohmann::json BinanceHttp::getSigned(const std::string &path, const std::string
 	try { return nlohmann::json::parse(res); } catch(...) { return nlohmann::json::object(); }
 }
 
+nlohmann::json BinanceHttp::getServerTime() {
+	return getPublic("/fapi/v1/time", "");
+}
+
+nlohmann::json BinanceHttp::getTickerPrice(const std::string &symbol) {
+	return getPublic("/fapi/v1/ticker/price", "symbol=" + symbol);
+}
+
+nlohmann::json BinanceHttp::getDepth(const std::string &symbol, int limit) {
+	std::ostringstream params;
+	params << "symbol=" << symbol << "&limit=" << limit;
+	return getPublic("/fapi/v1/depth", params.str());
+}
+
 nlohmann::json BinanceHttp::getAccountBalance() {
-	// Futures balance endpoint
 	return getSigned("/fapi/v2/balance", "");
+}
+
+nlohmann::json BinanceHttp::getFuturesAccount() {
+	return getSigned("/fapi/v2/account", "");
 }
 
 nlohmann::json BinanceHttp::signedRequest(const std::string &path, const std::string &params, const std::string &method) {
@@ -72,13 +90,26 @@ nlohmann::json BinanceHttp::cancelOrder(const std::string &symbol, long long ord
 	return signedRequest("/fapi/v1/order", params.str(), "DELETE");
 }
 
-BinanceHttp::BinanceHttp(const std::string &apiKey, const std::string &secret, bool useTestnet)
+BinanceHttp::BinanceHttp(const std::string &apiKey, const std::string &secret, bool useTestnet, bool useDemo)
 	: apiKey_(apiKey), secret_(secret), offlineMode_(false), csvDataPath_(""), csvSourceInterval_("") {
-#ifdef SIMULATION
-	baseUrl_ = "https://testnet.binancefuture.com";
-#else
-	baseUrl_ = useTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
-#endif
+	if (useDemo) {
+		baseUrl_ = "https://demo-fapi.binance.com";
+		hostHeader_ = "";
+	} else {
+		baseUrl_ = useTestnet ? "https://testnet.binancefuture.com" : "https://fapi.binance.com";
+		hostHeader_ = "";
+	}
+	std::cout << "[BinanceHttp] Base URL: " << baseUrl_ << std::endl;
+}
+
+void BinanceHttp::setDemoBaseUrl(const std::string& url, const std::string& hostHeader) {
+	if (!url.empty()) {
+		baseUrl_ = url;
+		hostHeader_ = hostHeader;
+		std::cout << "[BinanceHttp] Demo base URL override: " << baseUrl_;
+		if (!hostHeader_.empty()) std::cout << " (Host: " << hostHeader_ << ")";
+		std::cout << std::endl;
+	}
 }
 
 void BinanceHttp::setOfflineMode(bool offline) {
@@ -104,6 +135,34 @@ void BinanceHttp::setCsvSourceInterval(const std::string& interval) {
 	std::cout << "[BinanceHttp] CSV source interval set to: " << interval << std::endl;
 }
 
+void BinanceHttp::setHttpProxy(const std::string& proxy) {
+	httpProxy_ = proxy;
+	if (!httpProxy_.empty()) {
+		std::cout << "[BinanceHttp] HTTP proxy: " << httpProxy_ << std::endl;
+	}
+}
+
+namespace {
+void applyCurlProxy(CURL* curl, const std::string& configuredProxy) {
+	const char* proxy = nullptr;
+	if (!configuredProxy.empty()) {
+		proxy = configuredProxy.c_str();
+	} else if (const char* p = std::getenv("HTTPS_PROXY"); p && *p) {
+		proxy = p;
+	} else if (const char* p = std::getenv("https_proxy"); p && *p) {
+		proxy = p;
+	} else if (const char* p = std::getenv("HTTP_PROXY"); p && *p) {
+		proxy = p;
+	} else if (const char* p = std::getenv("http_proxy"); p && *p) {
+		proxy = p;
+	}
+	if (proxy && *proxy) {
+		curl_easy_setopt(curl, CURLOPT_PROXY, proxy);
+		curl_easy_setopt(curl, CURLOPT_PROXYTYPE, CURLPROXY_HTTP);
+	}
+}
+}
+
 std::string BinanceHttp::doRequest(const std::string &url, const std::string &method, const std::string &body, const std::string &headers) {
 	CURL *curl = curl_easy_init();
 	std::string readBuffer;
@@ -112,15 +171,26 @@ std::string BinanceHttp::doRequest(const std::string &url, const std::string &me
 		if(!headers.empty()) {
 			chunk = curl_slist_append(chunk, headers.c_str());
 		}
+		if(!hostHeader_.empty()) {
+			std::string hostHdr = "Host: " + hostHeader_;
+			chunk = curl_slist_append(chunk, hostHdr.c_str());
+		}
+		applyCurlProxy(curl, httpProxy_);
 		curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
 		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
 		// 禁用 SSL 证书验证（仅用于调试）
 		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
 		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-		// 设置超时（60秒）
-		curl_easy_setopt(curl, CURLOPT_TIMEOUT, 60L);
-		if(!headers.empty()) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+		curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+		// 启用 TCP keep-alive
+		curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+		// 禁用缓存
+		curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 1L);
+		// 明确指定使用 TLS
+		curl_easy_setopt(curl, CURLOPT_USE_SSL, CURLUSESSL_ALL);
+		if(chunk) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
 		if(method == "POST") {
 			curl_easy_setopt(curl, CURLOPT_POST, 1L);
 			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
@@ -214,9 +284,14 @@ nlohmann::json BinanceHttp::getKlines(const std::string &symbol, const std::stri
 	oss << baseUrl_ << "/fapi/v1/klines?symbol=" << symbol << "&interval=" << interval << "&limit=" << limit;
 	std::string res = doRequest(oss.str(), "GET", "", "");
 	try {
-		return nlohmann::json::parse(res);
+		auto j = nlohmann::json::parse(res);
+		if (j.is_object() && j.contains("code")) {
+			std::cerr << "[BinanceHttp][API] " << j.dump() << std::endl;
+		}
+		return j;
 	} catch(...) {
-		std::cerr << "[BinanceHttp][Error] Failed to parse API response" << std::endl;
+		std::cerr << "[BinanceHttp][Error] Failed to parse API response (len=" << res.size() << ")" << std::endl;
+		if (!res.empty() && res.size() < 500) std::cerr << "[BinanceHttp][Error] body: " << res << std::endl;
 		return nlohmann::json::array();
 	}
 }
@@ -227,6 +302,39 @@ nlohmann::json BinanceHttp::getPublic(const std::string &path, const std::string
 	if(!params.empty()) oss<<"?"<<params;
 	std::string res = doRequest(oss.str(), "GET", "", "");
 	try { return nlohmann::json::parse(res); } catch(...) { return nlohmann::json::array(); }
+}
+
+std::string BinanceHttp::directRequest(const std::string &url) {
+	return doRequest(url, "GET", "", "");
+}
+
+std::string BinanceHttp::testDirectRequest(const std::string &url, const std::string &hostHeader) {
+	CURL *curl = curl_easy_init();
+	std::string readBuffer;
+	if(curl) {
+		struct curl_slist *chunk = NULL;
+		if(!hostHeader.empty()) {
+			std::string header = "Host: " + hostHeader;
+			chunk = curl_slist_append(chunk, header.c_str());
+			std::cout << "[BinanceHttp] Setting Host header: " << hostHeader << std::endl;
+		}
+		applyCurlProxy(curl, std::string());
+		curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+		curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+		curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+		if(chunk) curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
+		CURLcode res = curl_easy_perform(curl);
+		if(res != CURLE_OK) {
+			std::cerr<<"[BinanceHttp] curl_easy_perform() failed: "<<curl_easy_strerror(res)<<std::endl;
+		}
+		if(chunk) curl_slist_free_all(chunk);
+		curl_easy_cleanup(curl);
+	}
+	return readBuffer;
 }
 
 nlohmann::json BinanceHttp::postSigned(const std::string &path, const std::string &params) {
