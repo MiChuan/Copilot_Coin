@@ -48,13 +48,13 @@
 
 ## 回测结果
 
-| 指标 | 数值 | 目标 |
-|------|------|------|
-| 收益率 | $1,000 → $3,799,961 | >50% 年化 |
-| 最大回撤 | 3.45% | <5% |
-| 往返胜率 | 58.1% (18/31) | >55% |
-| 年交易次数 | 31 | 30-50 |
-| Sharpe | 5.64 | — |
+| 指标 | 1h 数据 (2025.3~2026.6) | 1m→1h (2025.3~2026.3) |
+|------|--------------------------|-------------------------|
+| 收益率 | $1,000 → $3,799,961 | $1,000 → $4,526,103 |
+| 最大回撤 | 3.45% | 3.84% |
+| 胜率 | 45.2% (19/42) | 40.9% (18/44) |
+| 交易次数 | 42 | 44 |
+| Sharpe | 5.64 | 5.68 |
 
 ## 项目结构
 
@@ -71,7 +71,8 @@ Copilot_Coin/
 │   ├── util.cpp/h            # 工具函数
 │   └── mock_data_generator.cpp/h # 模拟数据生成
 ├── data/
-│   └── BTCUSDT_1h.csv        # 1h 历史 K 线
+│   ├── BTCUSDT_1h.csv        # 1h 历史 K 线
+│   └── BTCUSDT_1m_20250301_20260302.csv  # 1m 粒度 K 线
 ├── reports/                  # 回测报表（运行时生成）
 ├── config.json               # API 与回测配置
 ├── run_test.ps1              # 一键编译 + 回测脚本
@@ -121,7 +122,11 @@ cmake --build . --config Release
 ### CLI 命令
 
 ```powershell
+# 使用 1h CSV
 .\build\Release\Copilot_Coin.exe backtest report --csvPath "data\BTCUSDT_1h.csv"
+
+# 使用 1m CSV（需在 config.json 设置 csvInterval: "1m"）
+.\build\Release\Copilot_Coin.exe backtest report --csvPath "data\BTCUSDT_1m_20250301_20260302.csv"
 ```
 
 ## 配置文件
@@ -139,10 +144,16 @@ cmake --build . --config Release
     "leverage": 2.0,
     "hoursBack": 8760,
     "mode": "report",
-    "csvPath": "F:/Project/test/Copilot_Coin/data/BTCUSDT_1h.csv"
+    "csvPath": "data/BTCUSDT_1h.csv",
+    "csvInterval": "1m"
   }
 }
 ```
+
+| 字段 | 说明 |
+|------|------|
+| `csvPath` | CSV 数据文件路径 |
+| `csvInterval` | 源数据粒度，如 `"1m"`、`"1h"`，回测会自动聚合成 1h |
 
 ## 回测输出
 

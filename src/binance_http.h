@@ -13,6 +13,8 @@ public:
 
 	// Set CSV file path for offline data
 	void setCsvDataPath(const std::string& path);
+	// Set CSV source interval (e.g. "1m"), used to aggregate to target interval
+	void setCsvSourceInterval(const std::string& interval);
 
 	nlohmann::json getKlines(const std::string &symbol, const std::string &interval, int limit);
 	nlohmann::json getAccountBalance();
@@ -30,5 +32,6 @@ private:
 	std::string baseUrl_;
 	bool offlineMode_;
 	std::string csvDataPath_;
+	std::string csvSourceInterval_;
 	std::string doRequest(const std::string &url, const std::string &method, const std::string &body, const std::string &headers);
 };

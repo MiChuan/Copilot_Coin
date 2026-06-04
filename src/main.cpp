@@ -263,6 +263,12 @@ int main(int argc, char** argv){
 		std::cout << "[Main] Setting CSV path: " << opt.csvPath << std::endl;
 		api.setCsvDataPath(opt.csvPath);
 	}
+	// Set CSV source interval for 1m->1h aggregation
+	if (cfg.contains("backtest") && cfg["backtest"].contains("csvInterval")) {
+		std::string csvInterval = cfg["backtest"]["csvInterval"].get<std::string>();
+		std::cout << "[Main] Setting CSV source interval: " << csvInterval << std::endl;
+		api.setCsvSourceInterval(csvInterval);
+	}
 
 	if (opt.command == CommandType::Backtest) {
 		std::cout << "[Main] Running backtest mode=" << backtestModeName(opt.backtestMode) << std::endl;
