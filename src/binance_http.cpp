@@ -73,7 +73,7 @@ nlohmann::json BinanceHttp::cancelOrder(const std::string &symbol, long long ord
 }
 
 BinanceHttp::BinanceHttp(const std::string &apiKey, const std::string &secret, bool useTestnet)
-	: apiKey_(apiKey), secret_(secret), offlineMode_(false), csvDataPath_("") {
+	: apiKey_(apiKey), secret_(secret), offlineMode_(false), csvDataPath_(""), csvSourceInterval_("") {
 #ifdef SIMULATION
 	baseUrl_ = "https://testnet.binancefuture.com";
 #else
@@ -97,6 +97,11 @@ bool BinanceHttp::isOfflineMode() const {
 void BinanceHttp::setCsvDataPath(const std::string& path) {
 	csvDataPath_ = path;
 	std::cout << "[BinanceHttp] CSV data path set to: " << path << std::endl;
+}
+
+void BinanceHttp::setCsvSourceInterval(const std::string& interval) {
+	csvSourceInterval_ = interval;
+	std::cout << "[BinanceHttp] CSV source interval set to: " << interval << std::endl;
 }
 
 std::string BinanceHttp::doRequest(const std::string &url, const std::string &method, const std::string &body, const std::string &headers) {
@@ -142,11 +147,43 @@ nlohmann::json BinanceHttp::getKlines(const std::string &symbol, const std::stri
 	if (!csvDataPath_.empty()) {
 		std::cout << "[BinanceHttp][CSV] Loading data from: " << csvDataPath_ << std::endl;
 		int sourceLimit = limit;
-		if (interval == "4h") sourceLimit = limit * 4;
-		else if (interval == "1d") sourceLimit = limit * 24;
+		if (!csvSourceInterval_.empty()) {
+			// 1m source: scale up limit to load enough raw bars for aggregation
+			if (interval == "1h") sourceLimit = limit * 60;
+			else if (interval == "4h") sourceLimit = limit * 240;
+			else if (interval == "1d") sourceLimit = limit * 1440;
+			else sourceLimit = limit;
+		} else {
+			if (interval == "4h") sourceLimit = limit * 4;
+			else if (interval == "1d") sourceLimit = limit * 24;
+		}
 		std::cout << "[BinanceHttp][CSV] sourceLimit=" << sourceLimit << std::endl;
 		auto data = CsvKlineLoader::loadFromCsv(csvDataPath_, sourceLimit);
 		std::cout << "[BinanceHttp][CSV] loaded rows=" << data.size() << std::endl;
+		if (!csvSourceInterval_.empty()) {
+			// Aggregate from source interval to target interval
+			if (interval == "1h") {
+				std::cout << "[BinanceHttp][CSV] Aggregating 1m->1h (group 60)" << std::endl;
+				auto agg = CsvKlineLoader::aggregateKlines(data, 60);
+				std::cout << "[BinanceHttp][CSV] returning 1h data rows=" << agg.size() << std::endl;
+				return agg;
+			}
+			if (interval == "4h") {
+				std::cout << "[BinanceHttp][CSV] Aggregating 1m->4h (group 240)" << std::endl;
+				auto agg = CsvKlineLoader::aggregateKlines(data, 240);
+				std::cout << "[BinanceHttp][CSV] returning 4h data rows=" << agg.size() << std::endl;
+				return agg;
+			}
+			if (interval == "1d") {
+				std::cout << "[BinanceHttp][CSV] Aggregating 1m->1d (group 1440)" << std::endl;
+				auto agg = CsvKlineLoader::aggregateKlines(data, 1440);
+				std::cout << "[BinanceHttp][CSV] returning 1d data rows=" << agg.size() << std::endl;
+				return agg;
+			}
+			std::cout << "[BinanceHttp][CSV] returning raw data rows=" << data.size() << std::endl;
+			return data;
+		}
+		// Existing aggregation logic (for 1h source)
 		if (interval == "1h") {
 			std::cout << "[BinanceHttp][CSV] returning 1h data rows=" << data.size() << std::endl;
 			return data;

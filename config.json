@@ -8,6 +8,7 @@
     "leverage": 2.0,
     "hoursBack": 8760,
     "mode": "report",
-    "csvPath": "F:/Project/test/Copilot_Coin/data/BTCUSDT_1h.csv"
+    "csvPath": "F:/Project/test/Copilot_Coin/data/BTCUSDT_1m_20250301_20260302.csv",
+    "csvInterval": "1m"
   }
 }
