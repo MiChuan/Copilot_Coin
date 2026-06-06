@@ -118,45 +118,190 @@ cmake --build build --config Release
 产物：
 
 - `build/Release/Copilot_Coin.exe` — 主程序
-- `build/Release/test_demo_api.exe` — API 测试
+- `build/Release/test_demo_api.exe` — API 连通性测试
+- `build/Release/test_csv.exe` — CSV 加载测试
 
-## 运行
+---
 
-### 回测
+## 测试操作步骤
+
+### 前置条件
+
+| 项目 | 要求 |
+|------|------|
+| 编译 | 已完成 Release 构建 |
+| Demo API Key | 在 [demo.binance.com](https://demo.binance.com) 创建，启用合约权限 |
+| 持仓模式 | **单向持仓**（One-way Mode） |
+| 保证金模式 | 联合保证金（Multi-Assets）可选，程序已支持 USDT+USDC |
+| 网络 | 国内需配置代理（见下方） |
+
+> Demo / Testnet / 主网 API Key **不可混用**。
+
+---
+
+### 步骤 1：配置
+
+1. 编辑 `config_demo_live.json`，填入 Demo 站的 `apiKey` / `secret`（勿提交真实密钥）。
+2. 如需代理，添加 `"httpProxy": "http://127.0.0.1:7897"`。
+3. 运行脚本时会自动复制为 `config.json`（已在 `.gitignore`，不会入库）。
+
+`live` 段推荐配置：
+
+```json
+"live": {
+  "leverage": 2.0,
+  "positionPct": 0.3,
+  "recvWindowMs": 60000,
+  "timeSyncIntervalSeconds": 300,
+  "pollIntervalSeconds": 60
+}
+```
+
+| 字段 | 说明 |
+|------|------|
+| `pollIntervalSeconds` | 实盘轮询间隔（秒），默认 60 = 每分钟查一次 |
+| `recvWindowMs` | 签名请求时间窗口（毫秒） |
+| `timeSyncIntervalSeconds` | 后台与服务器时间同步间隔（秒） |
+
+---
+
+### 步骤 2：回测测试
+
+**离线 CSV 回测（生成报表）：**
 
 ```powershell
+# 确保存在 run_backtest.flag 或使用 backtest 参数
+echo. > run_backtest.flag
 .\run_test.ps1 -Release -Report
 ```
 
-或：
+**在线拉 K 线回测：**
 
 ```powershell
 .\build\Release\Copilot_Coin.exe backtest
 ```
 
-`config.json` 中 `backtest.mode` 为 `report` 时生成 `reports/` 报表；`csvInterval: "1m"` 时自动聚合为 1h。
+成功标志：终端输出 `Backtest trades=...`，`backtest.mode=report` 时在 `reports/` 生成 CSV/JSON。
 
-### Demo 实盘（[demo.binance.com](https://demo.binance.com)）
+---
 
-1. 在 **Demo 站**（非主站）创建 API Key，启用合约权限。
-2. 复制 `config_demo_live.json` 为 `config.json`，填入 `apiKey` / `secret`。
-3. 测试 API：
+### 步骤 3：Demo API 连通性测试（必做）
+
+仅测 API，不下单：
 
 ```powershell
 .\run_demo_live.ps1 -TestOnly
-# 或
+```
+
+或手动：
+
+```powershell
+Copy-Item config_demo_live.json config.json -Force
 .\build\Release\test_demo_api.exe
 ```
 
-4. 启动策略循环（会按信号下单）：
+**预期输出：**
+
+```
+=== Summary: ALL PASSED ===
+[OK  ] /fapi/v1/time
+[OK  ] /fapi/v2/account
+       totalWalletBalance=...
+```
+
+若失败：检查 API Key 来源、代理、防火墙。
+
+---
+
+### 步骤 4：Demo 实盘测试
 
 ```powershell
 .\run_demo_live.ps1
-# 或
-.\build\Release\Copilot_Coin.exe
 ```
 
-> **不要** 带 `backtest` 参数，否则进入回测模式。
+脚本会依次：编译 → API 测试 → 启动 live 循环。
+
+**不要** 带 `backtest` 参数；若存在 `run_backtest.flag`，脚本会自动删除（否则会误进回测模式）。
+
+**预期启动日志：**
+
+```
+[Main] CLI parsed: command=live ...
+[Executor] Position mode: one-way
+[BinanceHttp] Server time synced, offsetMs=...
+[Main] Live poll interval: 60s (1h RSI + strategy)
+```
+
+**每轮轮询日志（约每分钟）：**
+
+```
+[Live] Poll rsi1h=45.2 pos=0 buy=0 sell=1 reason=SELL|trendFlip|RSId=15
+[Live] Sell skipped: no long position (qty=0) reason=...
+```
+
+| 日志 | 含义 |
+|------|------|
+| `Poll rsi1h=` | 基于最新 1h K 线计算的 RSI(14) |
+| `pos=0` | 当前无持仓 |
+| `Sell skipped: no long position` | 策略发出卖信号但无多仓，**正常**（只做多，不平空开空） |
+| `Buy exec: ... "status":"FILLED"` | 开多成功 |
+| `Sell exec: ... "reduceOnly":true` | 平多成功 |
+
+停止程序：终端 **Ctrl+C**。
+
+在 [Demo 合约钱包](https://demo.binance.com/en/my/wallet/account/futures) 查看余额与持仓。
+
+---
+
+### 步骤 5：公开接口快测（可选）
+
+不依赖 API Key：
+
+```powershell
+.\test_api_endpoints.ps1
+.\test_api_endpoints.ps1 -BaseUrl "https://demo-fapi.binance.com"
+```
+
+---
+
+### 常见问题
+
+| 现象 | 原因 | 处理 |
+|------|------|------|
+| 进入 `backtest mode` 而非 live | 存在 `run_backtest.flag` 或传了 `backtest` 参数 | 删除 flag 或不带参数运行 |
+| `-4061 position side` | 账户为双向持仓 | 改为单向持仓，或重启程序（会自动调用 API 设置） |
+| `-1021 timestamp` | 本地时间与服务器偏差 | 已内置时间同步；可调大 `recvWindowMs` |
+| 有 SELL 信号但不下单 | 无多仓可平 | 正常；等 BUY 信号且空仓时才会开多 |
+| 启动时 `Closing stray short` | 上次误开空仓 | 程序自动 reduceOnly 平仓，一次性行为 |
+
+---
+
+## 运行（快捷命令）
+
+### 回测
+
+```powershell
+.\run_test.ps1 -Release -Report
+# 或
+.\build\Release\Copilot_Coin.exe backtest
+```
+
+`config.json` 中 `backtest.mode` 为 `report` 时生成 `reports/` 报表；`csvInterval: "1m"` 时自动聚合为 1h。
+
+### Demo 实盘
+
+```powershell
+.\run_demo_live.ps1 -TestOnly   # 仅测 API
+.\run_demo_live.ps1             # API 测试 + 实盘循环
+```
+
+CLI 可选参数：
+
+```powershell
+.\build\Release\Copilot_Coin.exe --pollInterval 60 --recvWindow 60000 --timeSyncInterval 300
+```
+
+> **不要** 带 `backtest` 参数运行 Demo 实盘。
 
 ### PowerShell 公开接口快测
 
@@ -193,7 +338,10 @@ Demo 环境 Base URL：`https://demo-fapi.binance.com`
   "httpProxy": "http://127.0.0.1:7897",
   "live": {
     "leverage": 2.0,
-    "positionPct": 0.3
+    "positionPct": 0.3,
+    "recvWindowMs": 60000,
+    "timeSyncIntervalSeconds": 300,
+    "pollIntervalSeconds": 60
   },
   "backtest": {
     "initialBalance": 1000.0,
@@ -214,6 +362,9 @@ Demo 环境 Base URL：`https://demo-fapi.binance.com`
 | `httpProxy` | HTTP/HTTPS 代理地址 |
 | `live.positionPct` | 单笔占用钱包余额比例 |
 | `live.leverage` | 合约杠杆 |
+| `live.pollIntervalSeconds` | 实盘轮询间隔（秒），默认 60 |
+| `live.recvWindowMs` | 签名请求 recvWindow（毫秒） |
+| `live.timeSyncIntervalSeconds` | 后台时间同步间隔（秒） |
 | `backtest.csvPath` | 回测 CSV 路径 |
 | `backtest.csvInterval` | 源粒度，`1m` 会聚合为 1h |
 | `backtest.mode` | `report` / `offline` / `run`（仅回测生效） |
@@ -230,7 +381,9 @@ Demo 环境 Base URL：`https://demo-fapi.binance.com`
 
 - 本项目用于研究与测试，非生产级风控。
 - Demo 与 Testnet、主网 API Key **不可混用**。
-- 实盘循环使用 **1h K 线**，与回测一致；轮询间隔 60 分钟。
+- 实盘循环：**每分钟**拉取最新 1h/1d K 线，计算 1h RSI 与策略信号；轮询间隔由 `live.pollIntervalSeconds` 控制（默认 60 秒）。
+- 实盘为**只做多**：BUY 仅空仓开多，SELL 仅持多平仓（`reduceOnly`），不会开空仓。
+- 启动时会同步交易所持仓，并自动平掉误开的空仓。
 - `config.json` 已在 `.gitignore` 中，请勿提交真实密钥。
 
 ## 仓库地址

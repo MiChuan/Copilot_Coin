@@ -26,6 +26,12 @@ if (-not (Test-Path $srcConfig)) {
 Copy-Item -Force $srcConfig $dstConfig
 Write-Info "Using config: $ConfigFile -> config.json"
 
+$backtestFlag = Join-Path $RepoRoot "run_backtest.flag"
+if (Test-Path $backtestFlag) {
+    Remove-Item -Force $backtestFlag
+    Write-Info "Removed run_backtest.flag (forces backtest mode if present)"
+}
+
 $exe = Join-Path $RepoRoot "$BuildDir\$Configuration\Copilot_Coin.exe"
 $testExe = Join-Path $RepoRoot "$BuildDir\$Configuration\test_demo_api.exe"
 

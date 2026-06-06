@@ -1,15 +1,21 @@
 #include <iostream>
+#include <cmath>
 #include <thread>
 #include <chrono>
 #include <fstream>
 #include <filesystem>
 #include <iomanip>
 #include <optional>
+#include <curl/curl.h>
 #include "binance_http.h"
 #include "strategy.h"
 #include "executor.h"
 #include "backtest.h"
+#include "indicators.h"
 #include <nlohmann/json.hpp>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 	enum class CommandType {
@@ -37,6 +43,9 @@ namespace {
 		double slippagePerc = 0.0005;
 		double leverage = 3.0;
 		double positionPct = 0.3;
+		long long recvWindowMs = 60000;
+		int timeSyncIntervalSeconds = 300;
+		int pollIntervalSeconds = 60;
 		int hoursBack = 24 * 365;
 	};
 
@@ -92,6 +101,12 @@ namespace {
 				opt.slippagePerc = std::stod(argv[++i]);
 			} else if (a == "--leverage" && i + 1 < argc) {
 				opt.leverage = std::stod(argv[++i]);
+			} else if (a == "--recvWindow" && i + 1 < argc) {
+				opt.recvWindowMs = std::stoll(argv[++i]);
+			} else if (a == "--timeSyncInterval" && i + 1 < argc) {
+				opt.timeSyncIntervalSeconds = std::stoi(argv[++i]);
+			} else if (a == "--pollInterval" && i + 1 < argc) {
+				opt.pollIntervalSeconds = std::stoi(argv[++i]);
 			} else if (a == "--hoursBack" && i + 1 < argc) {
 				opt.hoursBack = std::stoi(argv[++i]);
 			}
@@ -129,6 +144,9 @@ namespace {
 			auto l = cfg["live"];
 			opt.leverage = l.value("leverage", opt.leverage);
 			opt.positionPct = l.value("positionPct", opt.positionPct);
+			opt.recvWindowMs = l.value("recvWindowMs", opt.recvWindowMs);
+			opt.timeSyncIntervalSeconds = l.value("timeSyncIntervalSeconds", opt.timeSyncIntervalSeconds);
+			opt.pollIntervalSeconds = l.value("pollIntervalSeconds", opt.pollIntervalSeconds);
 		}
 		if (cfg.contains("backtest")) {
 			auto b = cfg["backtest"];
@@ -224,6 +242,12 @@ namespace {
 }
 
 int main(int argc, char** argv){
+#ifdef _WIN32
+	// 设置控制台输出为 UTF-8
+	SetConsoleOutputCP(CP_UTF8);
+#endif
+	// 初始化 curl（必须在多线程使用前调用）
+	curl_global_init(CURL_GLOBAL_ALL);
 	std::cout << "[Main] Program start" << std::endl;
 	std::cout << "[Main] argc=" << argc << std::endl;
 	for (int i = 0; i < argc; ++i) {
@@ -264,6 +288,9 @@ int main(int argc, char** argv){
 		<< " fee=" << opt.feePerc
 		<< " slippage=" << opt.slippagePerc
 		<< " leverage=" << opt.leverage
+		<< " recvWindowMs=" << opt.recvWindowMs
+		<< " timeSyncIntervalSeconds=" << opt.timeSyncIntervalSeconds
+		<< " pollIntervalSeconds=" << opt.pollIntervalSeconds
 		<< " hoursBack=" << opt.hoursBack << std::endl;
 
 	BinanceHttp api(apiKey, secret, true, opt.useDemo);
@@ -273,10 +300,29 @@ int main(int argc, char** argv){
 	if (!opt.httpProxy.empty()) {
 		api.setHttpProxy(opt.httpProxy);
 	}
+	api.setRecvWindow(opt.recvWindowMs);
+	const bool needsTimeSync = opt.command != CommandType::Backtest || !opt.offlineMode;
+	if (needsTimeSync) {
+		api.syncServerTime();
+		api.startTimeSyncLoop(opt.timeSyncIntervalSeconds);
+	}
 	Strategy strat;
 	Executor exe(&api, opt.leverage);
 	exe.setLeverage(static_cast<int>(opt.leverage));
 	std::cout << "[Main] BinanceHttp/Strategy/Executor initialized (leverage=" << opt.leverage << ")" << std::endl;
+
+	if (opt.command != CommandType::Backtest || !opt.offlineMode) {
+		exe.ensureOneWayMode();
+		exe.syncLocalPosition("BTCUSDT");
+		double startupPos = exe.getExchangePositionQty("BTCUSDT");
+		if (startupPos < 0.0) {
+			const double shortQty = -startupPos;
+			std::cout << "[Main] Closing stray short position qty=" << shortQty << std::endl;
+			auto closeResp = exe.marketCloseShortQty("BTCUSDT", shortQty);
+			std::cout << "[Main] Close short: " << closeResp.dump() << std::endl;
+			exe.syncLocalPosition("BTCUSDT");
+		}
+	}
 
 	if (opt.command == CommandType::Backtest && opt.offlineMode) {
 		std::cout << "[Main] Enabling offline mode" << std::endl;
@@ -343,6 +389,8 @@ int main(int argc, char** argv){
 	std::cout << "[Main] Margin wallet=" << walletBal << " available(USDT+USDC)=" << availBal
 		<< " positionPct=" << opt.positionPct << std::endl;
 
+	std::cout << "[Main] Live poll interval: " << opt.pollIntervalSeconds << "s (1h RSI + strategy)" << std::endl;
+
 	// TP / SL 状态追踪
 	double tpOriginalQty = 0.0;
 	bool tp1Live = false;
@@ -367,12 +415,27 @@ int main(int argc, char** argv){
 		}
 		auto sig = strat.evaluate(s);
 
+		double rsi1h = 0.0;
+		auto rsi1hSeries = indicators::rsi(s.close_4h, 14);
+		if (!rsi1hSeries.empty()) rsi1h = rsi1hSeries.back();
+		const double posQtyNow = exe.getExchangePositionQty("BTCUSDT");
+		std::cout << "[Live] Poll rsi1h=" << std::fixed << std::setprecision(1) << rsi1h
+			<< " pos=" << posQtyNow
+			<< " buy=" << sig.buy << " sell=" << sig.sell;
+		if (!sig.reason.empty()) std::cout << " reason=" << sig.reason;
+		std::cout << std::endl;
+
 		double orderMargin = walletBal * opt.positionPct;
 		if (orderMargin <= 0.0) orderMargin = availBal * opt.positionPct;
 
-		// ===== 分批止盈检查 =====
+		// ===== 分批止盈检查（仅有多仓时） =====
+		const double exchangePos = exe.getExchangePositionQty("BTCUSDT");
 		Position pos = exe.getLocalPosition("BTCUSDT");
-		if(pos.qty > 0.0 && pos.avgPrice > 0.0) {
+		if (exchangePos > 0.0) {
+			if (pos.qty <= 0.0 || std::abs(pos.qty - exchangePos) > 1e-8) {
+				exe.syncLocalPosition("BTCUSDT");
+				pos = exe.getLocalPosition("BTCUSDT");
+			}
 			auto k1 = api.getKlines("BTCUSDT", "1m", 1);
 			if(k1.is_array() && !k1.empty()) {
 				double curPrice = std::stod(k1[0][4].get<std::string>());
@@ -391,7 +454,7 @@ int main(int argc, char** argv){
 					double closeQty = tpOriginalQty * 0.5;
 					if(closeQty > 0.0 && closeQty <= pos.qty) {
 						std::cout << "[Live][TP1] profitPct=" << profitPct*100 << "% closeQty=" << closeQty << std::endl;
-						auto resp = exe.marketSellQty("BTCUSDT", closeQty);
+						auto resp = exe.marketCloseLongQty("BTCUSDT", closeQty);
 						std::cout << "[Live][TP1] exec: " << resp.dump() << std::endl;
 						tp1Live = true;
 					}
@@ -403,7 +466,7 @@ int main(int argc, char** argv){
 					double closeQty = pos2.qty * 0.5;
 					if(closeQty > 0.0) {
 						std::cout << "[Live][TP2] profitPct=" << profitPct*100 << "% closeQty=" << closeQty << " remainQty=" << pos2.qty << std::endl;
-						auto resp = exe.marketSellQty("BTCUSDT", closeQty);
+						auto resp = exe.marketCloseLongQty("BTCUSDT", closeQty);
 						std::cout << "[Live][TP2] exec: " << resp.dump() << std::endl;
 						tp2Live = true;
 					}
@@ -415,7 +478,7 @@ int main(int argc, char** argv){
 					double closeQty = posSL.qty * 0.8;
 					if(closeQty > 0.0) {
 						std::cout << "[Live][SL] lossPct=" << profitPct*100 << "% closeQty=" << closeQty << " remainQty=" << posSL.qty << std::endl;
-						auto resp = exe.marketSellQty("BTCUSDT", closeQty);
+						auto resp = exe.marketCloseLongQty("BTCUSDT", closeQty);
 						std::cout << "[Live][SL] exec: " << resp.dump() << std::endl;
 						slLive = true;
 					}
@@ -430,25 +493,38 @@ int main(int argc, char** argv){
 		}
 
 		if(sig.buy){
-			auto resp = exe.marketBuy("BTCUSDT", orderMargin, opt.leverage);
-			std::cout<<"Buy exec: "<<resp.dump()<<" margin="<<orderMargin<<" reason="<<sig.reason<<std::endl;
-			// 重置止盈/止损状态，等待下一轮更新
-			tpOriginalQty = 0.0;
-			tp1Live = false;
-			tp2Live = false;
-			slLive = false;
+			const double posQty = exe.getExchangePositionQty("BTCUSDT");
+			if(posQty <= 0.0) {
+				if(posQty < 0.0) {
+					std::cout << "[Live] Buy skipped: short position open (qty=" << posQty << ")" << std::endl;
+				} else {
+					auto resp = exe.marketBuy("BTCUSDT", orderMargin, opt.leverage);
+					std::cout<<"Buy exec: "<<resp.dump()<<" margin="<<orderMargin<<" reason="<<sig.reason<<std::endl;
+					tpOriginalQty = 0.0;
+					tp1Live = false;
+					tp2Live = false;
+					slLive = false;
+				}
+			} else {
+				std::cout << "[Live] Buy skipped: already long (qty=" << posQty << ")" << std::endl;
+			}
 		}
 		if(sig.sell){
-			auto resp = exe.marketSell("BTCUSDT", orderMargin, opt.leverage);
-			std::cout<<"Sell exec: "<<resp.dump()<<" margin="<<orderMargin<<" reason="<<sig.reason<<std::endl;
-			tpOriginalQty = 0.0;
-			tp1Live = false;
-			tp2Live = false;
-			slLive = false;
+			const double posQty = exe.getExchangePositionQty("BTCUSDT");
+			if(posQty > 0.0) {
+				auto resp = exe.marketCloseLongQty("BTCUSDT", posQty);
+				std::cout<<"Sell exec: "<<resp.dump()<<" closeQty="<<posQty<<" reason="<<sig.reason<<std::endl;
+				tpOriginalQty = 0.0;
+				tp1Live = false;
+				tp2Live = false;
+				slLive = false;
+			} else {
+				std::cout << "[Live] Sell skipped: no long position (qty=" << posQty << ") reason=" << sig.reason << std::endl;
+			}
 		}
 		walletBal = exe.getWalletBalance();
 		availBal = exe.getAvailableUSDT();
-		std::this_thread::sleep_for(std::chrono::minutes(60));
+		std::this_thread::sleep_for(std::chrono::seconds(opt.pollIntervalSeconds));
 	}
 	return 0;
 }

@@ -3,9 +3,9 @@
 #include "mock_data_generator.h"
 #include "csv_kline_loader.h"
 #include <curl/curl.h>
-#include <sstream>
 #include <iostream>
-#include <cstdlib>
+#include <sstream>
+#include <chrono>
 
 static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* userp) {
 	((std::string*)userp)->append(static_cast<char*>(contents), size * nmemb);
@@ -13,17 +13,19 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
 }
 
 nlohmann::json BinanceHttp::getSigned(const std::string &path, const std::string &params) {
-	long long ts = util::current_timestamp_ms();
-	std::ostringstream qs;
-	if(!params.empty()) qs<<params<<"&";
-	qs<<"timestamp="<<ts;
-	std::string signature = util::hmac_sha256_hex(secret_, qs.str());
-	qs<<"&signature="<<signature;
+	std::string qstring = buildSignedQuery(params);
 	std::ostringstream url;
-	url<<baseUrl_<<path<<"?"<<qs.str();
+	url << baseUrl_ << path << "?" << qstring;
 	std::string headers = "X-MBX-APIKEY: ";
 	headers += apiKey_;
 	std::string res = doRequest(url.str(), "GET", "", headers);
+	if (isTimestampError(res)) {
+		resyncTimeIfNeeded();
+		qstring = buildSignedQuery(params);
+		std::ostringstream retryUrl;
+		retryUrl << baseUrl_ << path << "?" << qstring;
+		res = doRequest(retryUrl.str(), "GET", "", headers);
+	}
 	try { return nlohmann::json::parse(res); } catch(...) { return nlohmann::json::object(); }
 }
 
@@ -50,21 +52,24 @@ nlohmann::json BinanceHttp::getFuturesAccount() {
 }
 
 nlohmann::json BinanceHttp::signedRequest(const std::string &path, const std::string &params, const std::string &method) {
-	long long ts = util::current_timestamp_ms();
-	std::ostringstream qs;
-	if(!params.empty()) qs<<params<<"&";
-	qs<<"timestamp="<<ts;
-	std::string signature = util::hmac_sha256_hex(secret_, qs.str());
-	qs<<"&signature="<<signature;
+	std::string qstring = buildSignedQuery(params);
 	std::ostringstream url;
-	url<<baseUrl_<<path;
+	url << baseUrl_ << path;
 	std::string headers = "X-MBX-APIKEY: "; headers += apiKey_;
-	std::string qstring = qs.str();
 	std::string res;
 	if(method=="GET" || method=="DELETE") {
 		res = doRequest(url.str()+"?"+qstring, method, "", headers);
 	} else {
 		res = doRequest(url.str(), method, qstring, headers);
+	}
+	if (isTimestampError(res)) {
+		resyncTimeIfNeeded();
+		qstring = buildSignedQuery(params);
+		if(method=="GET" || method=="DELETE") {
+			res = doRequest(url.str()+"?"+qstring, method, "", headers);
+		} else {
+			res = doRequest(url.str(), method, qstring, headers);
+		}
 	}
 	try { return nlohmann::json::parse(res); } catch(...) { return nlohmann::json::object(); }
 }
@@ -100,6 +105,10 @@ BinanceHttp::BinanceHttp(const std::string &apiKey, const std::string &secret, b
 		hostHeader_ = "";
 	}
 	std::cout << "[BinanceHttp] Base URL: " << baseUrl_ << std::endl;
+}
+
+BinanceHttp::~BinanceHttp() {
+	stopTimeSyncLoop();
 }
 
 void BinanceHttp::setDemoBaseUrl(const std::string& url, const std::string& hostHeader) {
@@ -140,6 +149,82 @@ void BinanceHttp::setHttpProxy(const std::string& proxy) {
 	if (!httpProxy_.empty()) {
 		std::cout << "[BinanceHttp] HTTP proxy: " << httpProxy_ << std::endl;
 	}
+}
+
+void BinanceHttp::setRecvWindow(long long recvWindowMs) {
+	if (recvWindowMs < 1000) recvWindowMs = 1000;
+	recvWindowMs_ = recvWindowMs;
+	std::cout << "[BinanceHttp] recvWindow set to: " << recvWindowMs_ << std::endl;
+}
+
+void BinanceHttp::startTimeSyncLoop(int intervalSeconds) {
+	if (intervalSeconds < 30) intervalSeconds = 30;
+	stopTimeSyncLoop();
+	stopTimeSync_ = false;
+	timeSyncThread_ = std::thread([this, intervalSeconds]() {
+		while (!stopTimeSync_) {
+			std::this_thread::sleep_for(std::chrono::seconds(intervalSeconds));
+			if (stopTimeSync_) break;
+			this->syncServerTime();
+		}
+	});
+	std::cout << "[BinanceHttp] Time sync loop started, intervalSeconds=" << intervalSeconds << std::endl;
+}
+
+void BinanceHttp::stopTimeSyncLoop() {
+	stopTimeSync_ = true;
+	if (timeSyncThread_.joinable()) {
+		timeSyncThread_.join();
+	}
+}
+
+void BinanceHttp::syncServerTime() {
+	std::ostringstream oss;
+	oss << baseUrl_ << "/fapi/v1/time";
+	std::string res = doRequest(oss.str(), "GET", "", "");
+	try {
+		auto j = nlohmann::json::parse(res);
+		if (j.contains("serverTime")) {
+			long long server = j["serverTime"].get<long long>();
+			long long local = util::current_timestamp_ms();
+			{
+				std::lock_guard<std::mutex> lock(timeMutex_);
+				timeOffsetMs_ = server - local;
+				timeSynced_ = true;
+			}
+			std::cout << "[BinanceHttp] Server time synced, offsetMs=" << timeOffsetMs_ << std::endl;
+		}
+	} catch (...) {
+		std::cerr << "[BinanceHttp][Warn] Failed to sync server time" << std::endl;
+	}
+}
+
+void BinanceHttp::resyncTimeIfNeeded() {
+	std::cout << "[BinanceHttp][Warn] Detected timestamp error, re-syncing server time" << std::endl;
+	timeSynced_ = false;
+	syncServerTime();
+}
+
+bool BinanceHttp::isTimestampError(const std::string& response) const {
+	return response.find("\"code\":-1021") != std::string::npos ||
+		response.find("Timestamp for this request is outside of the recvWindow") != std::string::npos ||
+		response.find("timestamp for this request is outside of the recvWindow") != std::string::npos;
+}
+
+std::string BinanceHttp::buildSignedQuery(const std::string& params) {
+	if (!timeSynced_) syncServerTime();
+	long long offsetMs = 0;
+	{
+		std::lock_guard<std::mutex> lock(timeMutex_);
+		offsetMs = timeOffsetMs_;
+	}
+	long long ts = util::current_timestamp_ms() + offsetMs;
+	std::ostringstream qs;
+	if (!params.empty()) qs << params << "&";
+	qs << "recvWindow=" << recvWindowMs_ << "&timestamp=" << ts;
+	std::string signature = util::hmac_sha256_hex(secret_, qs.str());
+	qs << "&signature=" << signature;
+	return qs.str();
 }
 
 namespace {
@@ -338,17 +423,16 @@ std::string BinanceHttp::testDirectRequest(const std::string &url, const std::st
 }
 
 nlohmann::json BinanceHttp::postSigned(const std::string &path, const std::string &params) {
-	long long ts = util::current_timestamp_ms();
-	std::ostringstream qs;
-	if(!params.empty()) qs<<params<<"&";
-	qs<<"timestamp="<<ts;
-	std::string signature = util::hmac_sha256_hex(secret_, qs.str());
-	qs<<"&signature="<<signature;
+	std::string body = buildSignedQuery(params);
 	std::ostringstream url;
 	url<<baseUrl_<<path;
 	std::string headers = "X-MBX-APIKEY: ";
 	headers += apiKey_;
-	std::string body = qs.str();
 	std::string res = doRequest(url.str(), "POST", body, headers);
+	if (isTimestampError(res)) {
+		resyncTimeIfNeeded();
+		body = buildSignedQuery(params);
+		res = doRequest(url.str(), "POST", body, headers);
+	}
 	try { return nlohmann::json::parse(res); } catch(...) { return nlohmann::json::object(); }
 }

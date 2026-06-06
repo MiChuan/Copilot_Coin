@@ -1,13 +1,21 @@
 #pragma once
 
 #include <string>
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include <nlohmann/json.hpp>
 
 class BinanceHttp {
 public:
 	BinanceHttp(const std::string &apiKey, const std::string &secret, bool useTestnet=true, bool useDemo=false);
+	~BinanceHttp();
 	void setDemoBaseUrl(const std::string& url, const std::string& hostHeader = "");
 	void setHttpProxy(const std::string& proxy);
+	void setRecvWindow(long long recvWindowMs);
+	void startTimeSyncLoop(int intervalSeconds = 300);
+	void stopTimeSyncLoop();
+	void syncServerTime();
 
 	// Set offline mode
 	void setOfflineMode(bool offline);
@@ -43,5 +51,14 @@ private:
 	std::string csvDataPath_;
 	std::string csvSourceInterval_;
 	std::string httpProxy_;
+	long long timeOffsetMs_ = 0;
+	bool timeSynced_ = false;
+	long long recvWindowMs_ = 60000;
+	std::atomic<bool> stopTimeSync_{false};
+	std::thread timeSyncThread_;
+	std::mutex timeMutex_;
+	std::string buildSignedQuery(const std::string& params);
 	std::string doRequest(const std::string &url, const std::string &method, const std::string &body, const std::string &headers);
+	bool isTimestampError(const std::string& response) const;
+	void resyncTimeIfNeeded();
 };

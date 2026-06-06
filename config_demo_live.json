@@ -5,7 +5,10 @@
   "demoApiBaseUrl": "https://demo-fapi.binance.com",
   "live": {
     "leverage": 2.0,
-    "positionPct": 0.3
+    "positionPct": 0.3,
+    "recvWindowMs": 60000,
+    "timeSyncIntervalSeconds": 300,
+    "pollIntervalSeconds": 60
   },
   "backtest": {
     "mode": "run"
