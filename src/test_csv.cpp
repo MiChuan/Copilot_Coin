@@ -3,7 +3,7 @@
 
 int main() {
 	std::cout << "Starting CSV test..." << std::endl;
-	std::string csvPath = "F:\\Project\\test\\Copilot_Coin\\data\\BTCUSDT_1h.csv";
+	std::string csvPath = "data/BTCUSDT_1h.csv";
 
 	std::cout << "Loading CSV from: " << csvPath << std::endl;
 

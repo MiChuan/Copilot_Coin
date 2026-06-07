@@ -3,6 +3,7 @@
   "secret": "zBCXz8x8bLhU5zMBEFMI9Yzw0ggr6ZdmpfDg8LJek4jPv9VN9WciQKkoQgZXlEqc",
   "useDemo": true,
   "demoApiBaseUrl": "https://demo-fapi.binance.com",
+  "httpProxy": "http://127.0.0.1:10808",
   "live": {
     "leverage": 2.0,
     "positionPct": 0.3,

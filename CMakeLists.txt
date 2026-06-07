@@ -9,6 +9,11 @@ if(MSVC)
   add_compile_options(/utf-8)
 endif()
 
+# Linux needs pthread for std::thread / std::mutex
+if(UNIX AND NOT APPLE)
+  find_package(Threads REQUIRED)
+endif()
+
 # FetchContent: nlohmann-json (header-only library)
 include(FetchContent)
 FetchContent_Declare(
@@ -40,6 +45,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
   nlohmann_json::nlohmann_json
 )
 
+# Link pthread on Linux
+if(UNIX AND NOT APPLE)
+  target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
+endif()
+
 target_compile_definitions(${PROJECT_NAME} PRIVATE -DSIMULATION=1)
 
 # Test executable for CSV loading
@@ -70,5 +80,10 @@ target_link_libraries(test_demo_api PRIVATE
   OpenSSL::Crypto
   nlohmann_json::nlohmann_json
 )
+
+# Link pthread on Linux for test_demo_api
+if(UNIX AND NOT APPLE)
+  target_link_libraries(test_demo_api PRIVATE Threads::Threads)
+endif()
 
 target_compile_definitions(test_demo_api PRIVATE -DSIMULATION=1)

@@ -73,9 +73,12 @@ Copilot_Coin/
 ├── reports/                     # 回测报表（运行时生成）
 ├── config.json                  # 本地配置（不入库，含密钥）
 ├── config_demo_live.json        # Demo 实盘配置模板
-├── run_test.ps1                 # 编译 + 回测
-├── run_demo_live.ps1            # 编译 + Demo API 测试 + 实盘
+├── run_test.ps1                 # 编译 + 回测 (Windows)
+├── run_demo_live.ps1            # 编译 + Demo API 测试 + 实盘 (Windows)
+├── run_test.sh                  # 编译 + 回测 (Linux)
+├── run_demo_live.sh             # 编译 + Demo API 测试 + 实盘 (Linux)
 ├── test_api_endpoints.ps1       # PowerShell 公开接口测试
+├── test_api_connection.sh       # Bash 公开接口测试
 └── CMakeLists.txt
 ```
 
@@ -83,9 +86,15 @@ Copilot_Coin/
 
 ### 依赖
 
-- CMake 3.16+
-- Visual Studio 2022 或兼容 C++ 工具链
-- vcpkg：
+| 平台 | 依赖 |
+|------|------|
+| 通用 | CMake 3.16+, C++17 编译器 |
+| Windows | Visual Studio 2022 或兼容 C++ 工具链 |
+| Linux | g++ 9+, libcurl4-openssl-dev, libssl-dev |
+
+nlohmann-json 通过 CMake FetchContent 自动下载，无需手动安装。
+
+#### Windows (vcpkg)
 
 ```powershell
 git clone https://github.com/microsoft/vcpkg.git
@@ -93,22 +102,37 @@ git clone https://github.com/microsoft/vcpkg.git
 .\vcpkg\vcpkg.exe install nlohmann-json curl[openssl]:x64-windows openssl:x64-windows
 ```
 
+#### Linux (apt)
+
+```bash
+sudo apt-get install -y cmake g++ libcurl4-openssl-dev libssl-dev
+```
+
 ### 网络代理（可选）
 
 访问 `demo-fapi.binance.com` 或 testnet 若需代理，在 `config.json` 设置：
 
 ```json
-"httpProxy": "http://127.0.0.1:7897"
+"httpProxy": "http://127.0.0.1:10808"
 ```
 
-或在 PowerShell 中：
+Windows 环境变量：
 
 ```powershell
-$env:HTTP_PROXY = "http://127.0.0.1:7897"
-$env:HTTPS_PROXY = "http://127.0.0.1:7897"
+$env:HTTP_PROXY = "http://127.0.0.1:10808"
+$env:HTTPS_PROXY = "http://127.0.0.1:10808"
+```
+
+Linux 环境变量：
+
+```bash
+export HTTP_PROXY="http://127.0.0.1:10808"
+export HTTPS_PROXY="http://127.0.0.1:10808"
 ```
 
 ## 构建
+
+### Windows
 
 ```powershell
 cmake -S . -B build -A x64
@@ -120,6 +144,19 @@ cmake --build build --config Release
 - `build/Release/Copilot_Coin.exe` — 主程序
 - `build/Release/test_demo_api.exe` — API 连通性测试
 - `build/Release/test_csv.exe` — CSV 加载测试
+
+### Linux
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+```
+
+产物：
+
+- `build/Copilot_Coin` — 主程序
+- `build/test_demo_api` — API 连通性测试
+- `build/test_csv` — CSV 加载测试
 
 ---
 
@@ -142,7 +179,7 @@ cmake --build build --config Release
 ### 步骤 1：配置
 
 1. 编辑 `config_demo_live.json`，填入 Demo 站的 `apiKey` / `secret`（勿提交真实密钥）。
-2. 如需代理，添加 `"httpProxy": "http://127.0.0.1:7897"`。
+2. 如需代理，添加 `"httpProxy": "http://127.0.0.1:10808"`。
 3. 运行脚本时会自动复制为 `config.json`（已在 `.gitignore`，不会入库）。
 
 `live` 段推荐配置：
@@ -169,16 +206,34 @@ cmake --build build --config Release
 
 **离线 CSV 回测（生成报表）：**
 
+Windows：
+
 ```powershell
 # 确保存在 run_backtest.flag 或使用 backtest 参数
 echo. > run_backtest.flag
 .\run_test.ps1 -Release -Report
 ```
 
+Linux：
+
+```bash
+# 确保存在 run_backtest.flag 或使用 backtest 参数
+touch run_backtest.flag
+./run_test.sh --csv data/BTCUSDT_1h.csv --report
+```
+
 **在线拉 K 线回测：**
+
+Windows：
 
 ```powershell
 .\build\Release\Copilot_Coin.exe backtest
+```
+
+Linux：
+
+```bash
+./build/Copilot_Coin backtest
 ```
 
 成功标志：终端输出 `Backtest trades=...`，`backtest.mode=report` 时在 `reports/` 生成 CSV/JSON。
@@ -189,15 +244,32 @@ echo. > run_backtest.flag
 
 仅测 API，不下单：
 
+Windows：
+
 ```powershell
 .\run_demo_live.ps1 -TestOnly
 ```
 
+Linux：
+
+```bash
+./run_demo_live.sh config_demo_live.json Release --test-only
+```
+
 或手动：
+
+Windows：
 
 ```powershell
 Copy-Item config_demo_live.json config.json -Force
 .\build\Release\test_demo_api.exe
+```
+
+Linux：
+
+```bash
+cp config_demo_live.json config.json
+./build/test_demo_api
 ```
 
 **预期输出：**
@@ -215,8 +287,16 @@ Copy-Item config_demo_live.json config.json -Force
 
 ### 步骤 4：Demo 实盘测试
 
+Windows：
+
 ```powershell
 .\run_demo_live.ps1
+```
+
+Linux：
+
+```bash
+./run_demo_live.sh
 ```
 
 脚本会依次：编译 → API 测试 → 启动 live 循环。
@@ -257,9 +337,17 @@ Copy-Item config_demo_live.json config.json -Force
 
 不依赖 API Key：
 
+Windows：
+
 ```powershell
 .\test_api_endpoints.ps1
 .\test_api_endpoints.ps1 -BaseUrl "https://demo-fapi.binance.com"
+```
+
+Linux：
+
+```bash
+./test_api_connection.sh
 ```
 
 ---
@@ -280,34 +368,69 @@ Copy-Item config_demo_live.json config.json -Force
 
 ### 回测
 
+Windows：
+
 ```powershell
 .\run_test.ps1 -Release -Report
 # 或
 .\build\Release\Copilot_Coin.exe backtest
 ```
 
+Linux：
+
+```bash
+./run_test.sh --csv data/BTCUSDT_1h.csv --report
+# 或
+./build/Copilot_Coin backtest
+```
+
 `config.json` 中 `backtest.mode` 为 `report` 时生成 `reports/` 报表；`csvInterval: "1m"` 时自动聚合为 1h。
 
 ### Demo 实盘
+
+Windows：
 
 ```powershell
 .\run_demo_live.ps1 -TestOnly   # 仅测 API
 .\run_demo_live.ps1             # API 测试 + 实盘循环
 ```
 
+Linux：
+
+```bash
+./run_demo_live.sh config_demo_live.json Release --test-only  # 仅测 API
+./run_demo_live.sh                                          # API 测试 + 实盘循环
+```
+
 CLI 可选参数：
 
-```powershell
+```bash
+# Linux
+./build/Copilot_Coin --pollInterval 60 --recvWindow 60000 --timeSyncInterval 300
+
+# Windows
 .\build\Release\Copilot_Coin.exe --pollInterval 60 --recvWindow 60000 --timeSyncInterval 300
 ```
 
+| 参数 | 说明 |
+|------|------|
+| `backtest [run\|offline\|report]` | 进入回测模式，可指定子模式 |
+| `--csvPath <path>` | CSV 文件路径（回测） |
+| `--initialBalance <num>` | 初始资金（默认 1000） |
+| `--feePerc <num>` | 手续费率（默认 0.0004） |
+| `--slippagePerc <num>` | 滑点率（默认 0.0005） |
+| `--leverage <num>` | 杠杆（默认 3.0） |
+| `--recvWindow <ms>` | 签名请求时间窗口（默认 60000） |
+| `--timeSyncInterval <sec>` | 服务器时间同步间隔（默认 300） |
+| `--pollInterval <sec>` | 实盘轮询间隔（默认 60） |
+| `--hoursBack <num>` | 回测回溯小时数（默认 8760） |
+
 > **不要** 带 `backtest` 参数运行 Demo 实盘。
 
-### PowerShell 公开接口快测
+### Linux 公开接口快测
 
-```powershell
-.\test_api_endpoints.ps1
-.\test_api_endpoints.ps1 -BaseUrl "https://testnet.binancefuture.com"
+```bash
+./test_api_connection.sh
 ```
 
 ## API 端点
@@ -335,7 +458,7 @@ Demo 环境 Base URL：`https://demo-fapi.binance.com`
   "useDemo": true,
   "demoApiBaseUrl": "https://demo-fapi.binance.com",
   "demoApiHost": "",
-  "httpProxy": "http://127.0.0.1:7897",
+  "httpProxy": "http://127.0.0.1:10808",
   "live": {
     "leverage": 2.0,
     "positionPct": 0.3,
