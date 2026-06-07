@@ -1,4 +1,5 @@
 #include "indicators.h"
+#include <algorithm>
 #include <numeric>
 #include <cmath>
 

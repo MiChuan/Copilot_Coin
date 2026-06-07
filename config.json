@@ -1,14 +1,16 @@
 {
-  "apiKey": "YOUR_API_KEY",
-  "secret": "YOUR_SECRET",
-  "backtest": {
-    "initialBalance": 1000.0,
-    "feePerc": 0.0004,
-    "slippagePerc": 0.0005,
+  "apiKey": "Mww9FQvfALc68F9GW8qQbYkbOxstjnTfmiJKHi7u5IdjNc8QsbFyioiJQbjGbcLD",
+  "secret": "zBCXz8x8bLhU5zMBEFMI9Yzw0ggr6ZdmpfDg8LJek4jPv9VN9WciQKkoQgZXlEqc",
+  "useDemo": true,
+  "demoApiBaseUrl": "https://demo-fapi.binance.com",
+  "live": {
     "leverage": 2.0,
-    "hoursBack": 8760,
-    "mode": "report",
-    "csvPath": "F:/Project/test/Copilot_Coin/data/BTCUSDT_1m_20250301_20260302.csv",
-    "csvInterval": "1m"
+    "positionPct": 0.3,
+    "recvWindowMs": 60000,
+    "timeSyncIntervalSeconds": 300,
+    "pollIntervalSeconds": 60
+  },
+  "backtest": {
+    "mode": "run"
   }
 }

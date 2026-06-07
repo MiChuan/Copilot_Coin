@@ -9,8 +9,14 @@ if(MSVC)
   add_compile_options(/utf-8)
 endif()
 
-# ͳһ�� find_package�������������� vcpkg �ṩ
-find_package(nlohmann_json CONFIG REQUIRED)
+# FetchContent: nlohmann-json (header-only library)
+include(FetchContent)
+FetchContent_Declare(
+  json
+  URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+)
+FetchContent_MakeAvailable(json)
+
 find_package(CURL REQUIRED)
 find_package(OpenSSL REQUIRED)
 

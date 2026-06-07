@@ -1,6 +1,6 @@
 {
-  "apiKey": "YOUR_DEMO_API_KEY",
-  "secret": "YOUR_DEMO_SECRET",
+  "apiKey": "Mww9FQvfALc68F9GW8qQbYkbOxstjnTfmiJKHi7u5IdjNc8QsbFyioiJQbjGbcLD",
+  "secret": "zBCXz8x8bLhU5zMBEFMI9Yzw0ggr6ZdmpfDg8LJek4jPv9VN9WciQKkoQgZXlEqc",
   "useDemo": true,
   "backtest": {
     "mode": "run",

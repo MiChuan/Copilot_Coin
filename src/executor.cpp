@@ -109,9 +109,9 @@ bool Executor::adjustQtyToStepAndMin(const std::string &symbol, double &qty) {
 							return (int)(s.size() - pos - 1);
 						};
 						int decStep = decimals(stepStr);
-						int decMin = decimals(minStr);
-						int dec = std::max(decStep, decMin);
-						long double factor = std::powl(10.0L, dec);
+					int decMin = decimals(minStr);
+					int dec = std::max(decStep, decMin);
+					long double factor = powl(10.0L, dec);
 						// convert strings to integer representations
 						long long stepInt = (long long)std::llround(std::stold(stepStr) * factor);
 						long long minInt = (long long)std::llround(std::stold(minStr) * factor);
