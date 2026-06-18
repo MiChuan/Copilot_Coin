@@ -3,6 +3,70 @@
 #include <iostream>
 #include <cmath>
 
+namespace {
+
+struct DailyBar {
+	long long closeTime = 0;
+	double close = 0.0;
+};
+
+std::vector<DailyBar> parseDailyBars(const nlohmann::json& klines1d) {
+	std::vector<DailyBar> bars;
+	if (!klines1d.is_array()) return bars;
+	bars.reserve(klines1d.size());
+	for (const auto& k : klines1d) {
+		DailyBar d;
+		d.closeTime = k[6].get<long long>();
+		d.close = std::stod(k[4].get<std::string>());
+		bars.push_back(d);
+	}
+	return bars;
+}
+
+double netEquity(double balance, double position, double price, double entryPrice) {
+	if (position <= 0.0) return balance;
+	return balance + position * (price - entryPrice);
+}
+
+void closePartial(
+	double& balance,
+	double& position,
+	double entryPrice,
+	double originalQty,
+	double totalEntryFee,
+	double closeQty,
+	double exitEffPrice,
+	double feePerc,
+	long long entryTime,
+	long long exitTime,
+	const std::string& tag,
+	BacktestResult& res
+) {
+	double gross = closeQty * exitEffPrice;
+	double exitFee = gross * feePerc;
+	double pnl = (exitEffPrice - entryPrice) * closeQty;
+	balance += pnl - exitFee;
+	position -= closeQty;
+
+	TradeRecord tr;
+	tr.entryTime = entryTime;
+	tr.exitTime = exitTime;
+	tr.entryPrice = entryPrice;
+	tr.exitPrice = exitEffPrice;
+	tr.qty = closeQty;
+	double propEntryFee = (originalQty > 0) ? totalEntryFee * (closeQty / originalQty) : 0.0;
+	tr.entryFee = propEntryFee;
+	tr.exitFee = exitFee;
+	tr.pnl = pnl - propEntryFee - exitFee;
+	res.tradesRec.push_back(tr);
+
+	std::cout << "[Backtest][" << tag << "] time=" << exitTime
+		<< " closeQty=" << closeQty << " remainQty=" << position
+		<< " pnl=" << tr.pnl << " balance=" << balance << std::endl;
+}
+
+} // namespace
+
 Backtest::Backtest(BinanceHttp *api, Strategy *strategy)
 	: api_(api), strategy_(strategy) {}
 
@@ -11,16 +75,35 @@ BacktestResult Backtest::run(int hoursBack, double feePerc, double slippagePerc,
 	if (candles < 120) candles = 120;
 	std::cout << "[Backtest] Fetching " << candles << " 1h candles" << std::endl;
 	auto allK = api_->getKlines("BTCUSDT", "1h", candles);
-	std::cout << "[Backtest] Total candles loaded: " << allK.size() << std::endl;
-	return runOnKlines(allK, feePerc, slippagePerc, leverage, initialBalance);
+	auto k1d = api_->getKlines("BTCUSDT", "1d", candles / 24 + 60);
+	std::cout << "[Backtest] Total candles loaded: 1h=" << allK.size() << " 1d=" << k1d.size() << std::endl;
+	return runOnKlines(allK, feePerc, slippagePerc, leverage, initialBalance, k1d);
 }
 
-BacktestResult Backtest::runFrom1hKlines(const nlohmann::json& klines, double feePerc, double slippagePerc, double leverage, double initialBalance) {
-	std::cout << "[Backtest] Running from in-memory 1h klines: " << klines.size() << std::endl;
-	return runOnKlines(klines, feePerc, slippagePerc, leverage, initialBalance);
+BacktestResult Backtest::runFrom1hKlines(
+	const nlohmann::json& klines,
+	double feePerc,
+	double slippagePerc,
+	double leverage,
+	double initialBalance,
+	const nlohmann::json& klines1d
+) {
+	std::cout << "[Backtest] Running from in-memory 1h klines: " << klines.size();
+	if (klines1d.is_array() && !klines1d.empty()) {
+		std::cout << " with 1d klines: " << klines1d.size();
+	}
+	std::cout << std::endl;
+	return runOnKlines(klines, feePerc, slippagePerc, leverage, initialBalance, klines1d);
 }
 
-BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc, double slippagePerc, double leverage, double initialBalance) {
+BacktestResult Backtest::runOnKlines(
+	const nlohmann::json& allK,
+	double feePerc,
+	double slippagePerc,
+	double leverage,
+	double initialBalance,
+	const nlohmann::json& klines1d
+) {
 	BacktestResult res;
 	std::cout << "[Backtest] Params: fee=" << feePerc
 		<< " slippage=" << slippagePerc
@@ -40,6 +123,14 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 		return res;
 	}
 
+	const auto dailyBars = parseDailyBars(klines1d);
+	const bool useRealDaily = !dailyBars.empty();
+	if (useRealDaily) {
+		std::cout << "[Backtest] Using real 1d klines: " << dailyBars.size() << " bars" << std::endl;
+	} else {
+		std::cout << "[Backtest][Warn] No 1d klines provided, falling back to synthetic daily (every 24x1h)" << std::endl;
+	}
+
 	double balance = initialBalance;
 	double position = 0.0;
 	double entryPrice = 0.0;
@@ -57,6 +148,7 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 	std::vector<double> highs;
 	std::vector<double> lows;
 	std::vector<double> dailyCloses;
+	size_t dailyIdx = 0;
 
 	for (size_t i = 0; i < allK.size(); i++) {
 		try {
@@ -64,19 +156,25 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 			double volume = std::stod(allK[i][5].get<std::string>());
 			double high = std::stod(allK[i][2].get<std::string>());
 			double low = std::stod(allK[i][3].get<std::string>());
-			long long time = allK[i][0].get<long long>();
+			long long closeTime = allK[i][6].get<long long>();
 
 			closes.push_back(price);
 			vols.push_back(volume);
 			highs.push_back(high);
 			lows.push_back(low);
-			if ((i + 1) % 24 == 0) {
+
+			if (useRealDaily) {
+				while (dailyIdx < dailyBars.size() && dailyBars[dailyIdx].closeTime <= closeTime) {
+					dailyCloses.push_back(dailyBars[dailyIdx].close);
+					dailyIdx++;
+				}
+			} else if ((i + 1) % 24 == 0) {
 				dailyCloses.push_back(price);
 			}
 
 			if (i < 3 || i + 1 == allK.size() || (i + 1) % 100 == 0) {
 				std::cout << "[Backtest][Candle] i=" << i
-					<< " time=" << time
+					<< " time=" << closeTime
 					<< " price=" << price
 					<< " closeCount=" << closes.size()
 					<< " dayCount=" << dailyCloses.size()
@@ -86,9 +184,8 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 			}
 
 			if (closes.size() < 120 || dailyCloses.size() < 21 || vols.size() < 50) {
-				double netEquity = balance + (position > 0.0 ? (position * price / leverage) : 0.0);
-				equity.push_back(netEquity);
-				times.push_back(time);
+				equity.push_back(netEquity(balance, position, price, entryPrice));
+				times.push_back(closeTime);
 				continue;
 			}
 
@@ -112,124 +209,45 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 				position = qty;
 				originalQty = qty;
 				entryPrice = effectivePrice;
-				entryTime = time;
+				entryTime = closeTime;
 				totalEntryFee = entryFee;
 				tp1_triggered = false;
 				tp2_triggered = false;
 				sl_triggered = false;
 				balance -= entryFee;
-				std::cout << "[Backtest][TradeOpen] time=" << time << " price=" << effectivePrice << " qty=" << qty << " entryFee=" << entryFee << " balance=" << balance << std::endl;
+				std::cout << "[Backtest][TradeOpen] time=" << closeTime << " price=" << effectivePrice << " qty=" << qty << " entryFee=" << entryFee << " balance=" << balance << std::endl;
 			}
 
-			// ===== 分批止盈检查 =====
 			if (position > 0.0) {
 				double profitPct = (price - entryPrice) / entryPrice;
 
-				// TP1: 盈利 ≥ 8%，平仓原始仓位的 50%（不超过当前仓位）
 				if (!tp1_triggered && profitPct >= 0.08) {
 					double closeQty = std::min(originalQty * 0.5, position);
 					if (closeQty > 0.0) {
 						double exitEffPrice = price * (1.0 - slippagePerc);
-						double gross = closeQty * exitEffPrice;
-						double exitFee = gross * feePerc;
-						double pnl = (exitEffPrice - entryPrice) * closeQty;
-						balance += (gross / leverage) + pnl;
-						balance -= exitFee;
-						position -= closeQty;
+						closePartial(balance, position, entryPrice, originalQty, totalEntryFee, closeQty, exitEffPrice, feePerc, entryTime, closeTime, "TP1", res);
 						tp1_triggered = true;
-
-						TradeRecord tr;
-						tr.entryTime = entryTime;
-						tr.exitTime = time;
-						tr.entryPrice = entryPrice;
-						tr.exitPrice = exitEffPrice;
-						tr.qty = closeQty;
-						double propEntryFee = (originalQty > 0) ? totalEntryFee * (closeQty / originalQty) : 0.0;
-						tr.entryFee = propEntryFee;
-						tr.exitFee = exitFee;
-						tr.pnl = pnl - propEntryFee - exitFee;
-						res.tradesRec.push_back(tr);
-
-						std::cout << "[Backtest][TP1] time=" << time << " profitPct=" << profitPct * 100 << "% closeQty=" << closeQty << " remainQty=" << position << " pnl=" << tr.pnl << std::endl;
 					}
 				}
 
-				// TP2: 盈利 ≥ 15%，平仓剩余仓位的 50%
 				if (!tp2_triggered && position > 0.0 && profitPct >= 0.15) {
 					double closeQty = position * 0.5;
 					double exitEffPrice = price * (1.0 - slippagePerc);
-					double gross = closeQty * exitEffPrice;
-					double exitFee = gross * feePerc;
-					double pnl = (exitEffPrice - entryPrice) * closeQty;
-					balance += (gross / leverage) + pnl;
-					balance -= exitFee;
-					position -= closeQty;
+					closePartial(balance, position, entryPrice, originalQty, totalEntryFee, closeQty, exitEffPrice, feePerc, entryTime, closeTime, "TP2", res);
 					tp2_triggered = true;
-
-					TradeRecord tr;
-					tr.entryTime = entryTime;
-					tr.exitTime = time;
-					tr.entryPrice = entryPrice;
-					tr.exitPrice = exitEffPrice;
-					tr.qty = closeQty;
-					double propEntryFee = (originalQty > 0) ? totalEntryFee * (closeQty / originalQty) : 0.0;
-					tr.entryFee = propEntryFee;
-					tr.exitFee = exitFee;
-					tr.pnl = pnl - propEntryFee - exitFee;
-					res.tradesRec.push_back(tr);
-
-					std::cout << "[Backtest][TP2] time=" << time << " profitPct=" << profitPct * 100 << "% closeQty=" << closeQty << " remainQty=" << position << " pnl=" << tr.pnl << std::endl;
 				}
 
-				// SL: 浮亏 >= 2.5%，平仓当前仓位的 80%
 				if (!sl_triggered && profitPct <= -0.025) {
 					double closeQty = position * 0.8;
 					double exitEffPrice = price * (1.0 - slippagePerc);
-					double gross = closeQty * exitEffPrice;
-					double exitFee = gross * feePerc;
-					double pnl = (exitEffPrice - entryPrice) * closeQty;
-					balance += (gross / leverage) + pnl;
-					balance -= exitFee;
-					position -= closeQty;
+					closePartial(balance, position, entryPrice, originalQty, totalEntryFee, closeQty, exitEffPrice, feePerc, entryTime, closeTime, "SL", res);
 					sl_triggered = true;
-
-					TradeRecord tr;
-					tr.entryTime = entryTime;
-					tr.exitTime = time;
-					tr.entryPrice = entryPrice;
-					tr.exitPrice = exitEffPrice;
-					tr.qty = closeQty;
-					double propEntryFee = (originalQty > 0) ? totalEntryFee * (closeQty / originalQty) : 0.0;
-					tr.entryFee = propEntryFee;
-					tr.exitFee = exitFee;
-					tr.pnl = pnl - propEntryFee - exitFee;
-					res.tradesRec.push_back(tr);
-
-					std::cout << "[Backtest][SL] time=" << time << " lossPct=" << profitPct * 100 << "% closeQty=" << closeQty << " remainQty=" << position << " pnl=" << tr.pnl << std::endl;
 				}
 			}
 
 			if (sig.sell && position > 0.0) {
 				double effectivePrice = price * (1.0 - slippagePerc);
-				double gross = position * effectivePrice;
-				double exitFee = gross * feePerc;
-				double pnl = (effectivePrice - entryPrice) * position;
-				balance += (gross / leverage) + pnl;
-				balance -= exitFee;
-
-				TradeRecord tr;
-				tr.entryTime = entryTime;
-				tr.exitTime = time;
-				tr.entryPrice = entryPrice;
-				tr.exitPrice = effectivePrice;
-				tr.qty = position;
-				double propEntryFee = (originalQty > 0) ? totalEntryFee * (position / originalQty) : 0.0;
-				tr.entryFee = propEntryFee;
-				tr.exitFee = exitFee;
-				tr.pnl = pnl - propEntryFee - exitFee;
-				res.tradesRec.push_back(tr);
-
-				std::cout << "[Backtest][TradeClose] time=" << time << " price=" << effectivePrice << " gross=" << gross << " pnl=" << pnl << " exitFee=" << exitFee << " balance=" << balance << std::endl;
+				closePartial(balance, position, entryPrice, originalQty, totalEntryFee, position, effectivePrice, feePerc, entryTime, closeTime, "TradeClose", res);
 				position = 0.0;
 				originalQty = 0.0;
 				entryPrice = 0.0;
@@ -240,9 +258,8 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 				sl_triggered = false;
 			}
 
-			double netEquity = balance + (position > 0.0 ? (position * price / leverage) : 0.0);
-			equity.push_back(netEquity);
-			times.push_back(time);
+			equity.push_back(netEquity(balance, position, price, entryPrice));
+			times.push_back(closeTime);
 		} catch (const std::exception& e) {
 			std::cerr << "[Backtest][Error] Candle index " << i << " failed: " << e.what() << std::endl;
 		} catch (...) {
@@ -253,26 +270,9 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 	if (position > 0.0 && !allK.empty()) {
 		try {
 			double lastPrice = std::stod(allK.back()[4].get<std::string>());
+			long long lastCloseTime = allK.back()[6].get<long long>();
 			double effectivePrice = lastPrice * (1.0 - slippagePerc);
-			double gross = position * effectivePrice;
-			double exitFee = gross * feePerc;
-			double pnl = (effectivePrice - entryPrice) * position;
-			balance += (gross / leverage) + pnl;
-			balance -= exitFee;
-
-			TradeRecord tr;
-			tr.entryTime = entryTime;
-			tr.exitTime = allK.back()[0].get<long long>();
-			tr.entryPrice = entryPrice;
-			tr.exitPrice = effectivePrice;
-			tr.qty = position;
-			double propEntryFee = (originalQty > 0) ? totalEntryFee * (position / originalQty) : 0.0;
-			tr.entryFee = propEntryFee;
-			tr.exitFee = exitFee;
-			tr.pnl = pnl - propEntryFee - exitFee;
-			res.tradesRec.push_back(tr);
-
-			std::cout << "[Backtest][ForceClose] lastPrice=" << lastPrice << " effectivePrice=" << effectivePrice << " remainQty=" << position << " balance=" << balance << std::endl;
+			closePartial(balance, position, entryPrice, originalQty, totalEntryFee, position, effectivePrice, feePerc, entryTime, lastCloseTime, "ForceClose", res);
 		} catch (const std::exception& e) {
 			std::cerr << "[Backtest][Error] finalizing open position failed: " << e.what() << std::endl;
 		}
@@ -281,7 +281,8 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 	res.final_balance = balance;
 	res.initial_balance = initialBalance;
 	res.trades = (int)res.tradesRec.size();
-	int wins = 0; for (auto &t : res.tradesRec) if (t.pnl > 0) wins++;
+	int wins = 0;
+	for (auto &t : res.tradesRec) if (t.pnl > 0) wins++;
 	res.winRate = res.trades > 0 ? (double)wins / res.trades : 0.0;
 	res.equityCurve = equity;
 	res.equityTime = times;
@@ -289,8 +290,12 @@ BacktestResult Backtest::runOnKlines(const nlohmann::json& allK, double feePerc,
 	for (auto &v : equity) { if (v > peak) peak = v; double dd = (peak - v) / peak; if (dd > mdd) mdd = dd; }
 	res.maxDrawdown = mdd;
 	for (size_t i = 1; i < equity.size(); i++) returns.push_back((equity[i] - equity[i-1]) / equity[i-1]);
-	double mean = 0; for (auto &r : returns) mean += r; if (!returns.empty()) mean /= returns.size();
-	double var = 0; for (auto &r : returns) var += (r - mean) * (r - mean); if (!returns.empty()) var /= returns.size();
+	double mean = 0;
+	for (auto &r : returns) mean += r;
+	if (!returns.empty()) mean /= returns.size();
+	double var = 0;
+	for (auto &r : returns) var += (r - mean) * (r - mean);
+	if (!returns.empty()) var /= returns.size();
 	double stddev = std::sqrt(var);
 	res.sharpe = (stddev > 0) ? (mean / stddev * std::sqrt(24.0 * 365.0)) : 0.0;
 	std::cout << "[Backtest][Done] trades=" << res.trades << " winRate=" << res.winRate << " maxDD=" << res.maxDrawdown << " sharpe=" << res.sharpe << " finalBalance=" << res.final_balance << std::endl;

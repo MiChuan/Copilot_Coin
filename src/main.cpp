@@ -35,6 +35,8 @@ namespace {
 		bool offlineMode = false;
 		bool useDemo = false;
 		std::string csvPath;
+		std::string k1hJsonPath;
+		std::string k1dJsonPath;
 		std::string demoApiBaseUrl;
 		std::string demoApiHost;
 		std::string httpProxy;
@@ -107,6 +109,10 @@ namespace {
 				opt.timeSyncIntervalSeconds = std::stoi(argv[++i]);
 			} else if (a == "--pollInterval" && i + 1 < argc) {
 				opt.pollIntervalSeconds = std::stoi(argv[++i]);
+			} else if (a == "--k1hJson" && i + 1 < argc) {
+				opt.k1hJsonPath = argv[++i];
+			} else if (a == "--k1dJson" && i + 1 < argc) {
+				opt.k1dJsonPath = argv[++i];
 			} else if (a == "--hoursBack" && i + 1 < argc) {
 				opt.hoursBack = std::stoi(argv[++i]);
 			}
@@ -131,6 +137,16 @@ namespace {
 			std::cerr << "[Main][Warn] Invalid backtest.hoursBack value, using fallback=" << fallback << std::endl;
 		}
 		return fallback;
+	}
+
+	nlohmann::json loadJsonFile(const std::string& path) {
+		std::ifstream ifs(path);
+		if (!ifs) {
+			throw std::runtime_error("Failed to open JSON file: " + path);
+		}
+		nlohmann::json data;
+		ifs >> data;
+		return data;
 	}
 
 	void applyConfigOverrides(const nlohmann::json& cfg, CliOptions& opt, std::string& apiKey, std::string& secret) {
@@ -349,11 +365,26 @@ int main(int argc, char** argv){
 		if (!opt.csvPath.empty()) std::cout << "[Main] CSV mode active: " << opt.csvPath << std::endl;
 		try {
 			Backtest bt(&api, &strat);
-			std::cout << "[Main] Fetching 1h klines for backtest..." << std::endl;
-			auto k1h = api.getKlines("BTCUSDT", "1h", opt.hoursBack);
-			std::cout << "[Main] Kline payload size returned: " << k1h.size() << std::endl;
+			nlohmann::json k1h;
+			nlohmann::json k1d;
+			if (!opt.k1hJsonPath.empty()) {
+				std::cout << "[Main] Loading 1h klines from JSON: " << opt.k1hJsonPath << std::endl;
+				k1h = loadJsonFile(opt.k1hJsonPath);
+			} else {
+				std::cout << "[Main] Fetching 1h klines for backtest..." << std::endl;
+				k1h = api.getKlines("BTCUSDT", "1h", opt.hoursBack);
+			}
+			if (!opt.k1dJsonPath.empty()) {
+				std::cout << "[Main] Loading 1d klines from JSON: " << opt.k1dJsonPath << std::endl;
+				k1d = loadJsonFile(opt.k1dJsonPath);
+			} else {
+				std::cout << "[Main] Fetching 1d klines for backtest..." << std::endl;
+				k1d = api.getKlines("BTCUSDT", "1d", opt.hoursBack / 24 + 60);
+			}
+			std::cout << "[Main] Kline payload size returned: 1h=" << (k1h.is_array() ? k1h.size() : 0)
+				<< " 1d=" << (k1d.is_array() ? k1d.size() : 0) << std::endl;
 			std::cout << "[Main] Entering Backtest::runFrom1hKlines" << std::endl;
-			auto r = bt.runFrom1hKlines(k1h, opt.feePerc, opt.slippagePerc, opt.leverage, opt.initialBalance);
+			auto r = bt.runFrom1hKlines(k1h, opt.feePerc, opt.slippagePerc, opt.leverage, opt.initialBalance, k1d);
 			std::cout << "[Main] Backtest returned" << std::endl;
 			std::cout << "Backtest trades=" << r.trades << " start=" << r.initial_balance << " end=" << r.final_balance
 				<< " winRate=" << r.winRate << " maxDD=" << r.maxDrawdown << " sharpe=" << r.sharpe << std::endl;
